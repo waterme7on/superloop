@@ -50,7 +50,8 @@ When the user does not provide all fields, prefer these defaults:
 - `Constraints`
   - infer common MVP constraints if the user is clearly in speed mode
 - `Stop Rule`
-  - if the user does not specify one, default to unblocking the main path before optimization
+  - if the user does not specify one, initialize a maturity-aware default that is stronger than `main path unblocked`
+  - do not treat `stage complete` as `goal complete` unless the maturity target and gap ledger both support that claim
 
 ## Required fields
 

@@ -1,6 +1,6 @@
 ---
 name: superloop
-description: Use when the user wants Codex to run a goal-driven product validation loop for an app, storefront, landing page, or MVP. This skill turns a product goal into staged iteration with measurable gates, minimal code changes, mechanical verification, keep-or-discard decisions, and the next best experiment. Best for rapid validation, MVP shipping, and autoresearch-style execution adapted to products instead of only code quality.
+description: Use when the user wants Codex to run a goal-driven product validation loop for an app, storefront, landing page, or MVP. This skill turns a product goal into staged iteration with measurable gates, minimal code changes, mechanical verification, keep-or-discard decisions, and the next best experiment, backed by a local harness that persists contract state and round verdicts across turns.
 ---
 
 # Superloop
@@ -15,6 +15,9 @@ This skill adapts the `autoresearch` pattern to product work:
 - Each iteration makes one focused change
 - Every change must be verified
 - Keep wins, discard regressions, repeat
+
+This skill is harness-backed.
+Do not freehand the contract state, resume state, or stop decision when the bundled CLI can persist and audit them.
 
 ## Trigger cues
 
@@ -31,17 +34,59 @@ Do not use this skill when the user only wants:
 - a pure design brainstorm with no execution gate
 - a one-off refactor unrelated to product validation
 
+## Harness preflight
+
+Before running the first round in a workspace:
+
+```bash
+export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+export SUPERLOOP_HARNESS="$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh"
+```
+
+Then:
+
+1. Run `"$SUPERLOOP_HARNESS" resume`
+2. If there is no active run, initialize one with `init`
+3. After every substantial round, call `record`
+4. Use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
+
+Minimal init example:
+
+```bash
+"$SUPERLOOP_HARNESS" init \
+  --goal "Validate whether users complete the first useful action" \
+  --artifact "app" \
+  --maturity-target "product-shape-ready" \
+  --metric "first-session primary-action completion rate" \
+  --stage-gate "A new user can complete the first useful action without help" \
+  --scope "onboarding, primary action, analytics" \
+  --constraint "ship the smallest viable round"
+```
+
+Minimal round record example:
+
+```bash
+"$SUPERLOOP_HARNESS" record \
+  --hypothesis "Reducing setup friction increases first-session completion" \
+  --change "simplify onboarding and remove one blocking field" \
+  --round-gate "A new user reaches the first useful action in one session" \
+  --round-gate-result "hard-pass" \
+  --stage-status "stage-complete" \
+  --next-round "wire activation event and verify it fires"
+```
+
 ## First-turn behavior
 
 On the first response after this skill triggers:
 
-1. restate the working goal in one sentence
-2. state the current stage gate
-3. list explicit assumptions if the user did not provide a full contract
-4. say what this round will change
-5. say how this round will be verified
+1. load harness state with `resume`; if none exists, initialize it with `init`
+2. restate the working goal in one sentence
+3. state the current stage gate
+4. list explicit assumptions if the user did not provide a full contract
+5. say what this round will change
+6. say how this round will be verified
 
-If key information is missing, ask the smallest useful batch of questions. If safe defaults exist, state them, start with the first round, and keep going until a stop condition is met. If they do not, stop after the questions and wait.
+If key information is missing, ask the smallest useful batch of questions. If safe defaults exist, state them, initialize the harness with those defaults, start with the first round, and keep going until a stop condition is met. If they do not, stop after the questions and wait.
 
 ## Default execution mode
 
@@ -54,9 +99,10 @@ That means:
 - Codex should plan the current round in a compact way
 - Codex should then execute that round without asking for per-step approval
 - Codex should verify the result mechanically
-- Codex should report the keep/discard decision, choose the next round, and continue unless an explicit stop condition has been met
+- Codex should record the round through the harness, report the keep/discard decision, choose the next round, and continue unless an explicit stop condition has been met
 
 Do not stop after one round just because a report was produced.
+Do not claim `pause` or `stop` without a corresponding harness record.
 
 Unless the user says to stop, keep iterating automatically while all of these remain true:
 
@@ -149,7 +195,7 @@ If the user gives only a rough goal, guide with a compact batch like:
 - `对象是 storefront、landing page，还是 app 主流程？`
 - `有什么硬限制吗，比如今晚内完成、不接 CMS、不做大改版？`
 
-Then turn the answers into the goal contract internally.
+Then turn the answers into the goal contract internally and persist it with the harness.
 
 ## Core Model
 
@@ -428,6 +474,7 @@ When the user asks for a loop but has not specified the exact round format, resp
 - `Current Round Gate`
 - `Current Stage Gate`
 - `Top-level Stop Rule`
+- `Harness State Path`
 - `Assumptions`
 - `This Round`
 - `Verification Plan`
@@ -449,6 +496,7 @@ Unless the user asks otherwise, end each substantial round with:
 - change made
 - verification result
 - keep/discard decision
+- harness verdict
 - next round chosen
 
 In a continuing run, `next round chosen` means the loop will move into that round automatically unless an explicit stop condition is met or a forced pause is required.
@@ -481,7 +529,8 @@ Default behavior:
 
 - run a round
 - report the outcome
-- move into the next round automatically if the stop conditions are not met
+- record the outcome through the harness
+- move into the next round automatically if the harness verdict is `continue`
 
 Keep looping until one of these happens:
 
@@ -503,9 +552,12 @@ When pausing a continuous run, say what blocked continuation and what would allo
 - Do not optimize a business metric without instrumentation
 - Do not mix large redesigns with fine-grained conversion experiments in the same round
 - Do not let the loop expand scope on its own; expand only if the current phase is blocked
+- Do not finish a run without persisting the current round through the harness
+- Do not let a weak inferred stop rule override the chosen maturity target
 
 ## References
 
+- For the harness workflow and CLI contract: [references/harness.md](references/harness.md)
 - For turning a vague idea into a measurable target: [references/goal-contract.md](references/goal-contract.md)
 - For the execution loop and decision rules: [references/loop-protocol.md](references/loop-protocol.md)
 - For picking default stage gates by artifact: [references/artifact-gates.md](references/artifact-gates.md)

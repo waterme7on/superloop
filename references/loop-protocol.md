@@ -6,6 +6,7 @@ Default execution mode:
 
 - keep running rounds until a stop condition is met
 - each round = `plan -> build -> verify -> report`
+- persist the contract and every substantial round with the bundled harness
 
 Producing a report does not end the loop by itself.
 
@@ -27,6 +28,7 @@ If the requested maturity is higher than the current stop rule implies, tighten 
 Before starting a loop:
 
 - inspect current state
+- load or initialize harness state
 - calibrate requested maturity
 - identify the live phase goal
 - check whether instrumentation exists
@@ -135,6 +137,7 @@ Choose from:
 5. escalate because the current goal is blocked by a higher-level product issue
 
 By default, report, choose the next round, and continue into it.
+Record the round through the harness before calling it `continue`, `pause`, or `stop`.
 
 Finish only when:
 
