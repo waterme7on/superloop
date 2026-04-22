@@ -1,8 +1,8 @@
 interface:
   display_name: "Superloop"
-  short_description: "Maturity-aware product loop for demos, betas, and real products"
+  short_description: "CEO-to-agent iterative coding harness with persisted round state"
   brand_color: "#0F766E"
-  default_prompt: "Use $superloop and its harness to turn a product goal into maturity-aware staged loops, keep round gates and stop rules separate, persist round state, and execute the next best iteration."
+  default_prompt: "Use $superloop and its harness to run a CEO-to-agent coding loop: define the mission, keep budget and stop rules explicit, persist round state, and keep iterating until the goal or budget boundary is reached."
 
 policy:
   allow_implicit_invocation: true

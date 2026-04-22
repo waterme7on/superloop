@@ -1,27 +1,40 @@
 # Superloop
 
-`superloop` is a Codex skill for product-validation loops.
+`superloop` is a harnessed skill for iterative vibe coding.
 
-It is meant for work like:
+The core idea is simple:
 
-- storefront conversion loops
-- landing-page validation
-- app onboarding and activation work
-- MVP shipping where "done" should be tied to stage gates and stop rules, not vibes
+- the user acts as CEO
+- the coding agent acts as the execution worker
+- the mission, scope, budget, and stop rule are made explicit
+- the harness keeps iterating through execution rounds until the goal is achieved or the agreed round or time budget is spent
 
-This version is harness-backed. In addition to the skill prompt, it includes a local CLI that persists goal-contract state, round outcomes, blockers, and `continue|pause|stop` verdicts across turns.
+This repo includes one ready-to-run implementation for local skill environments today, but the operating model itself is tool-agnostic.
 
 ## What is in this repo
 
-- `SKILL.md`: the main skill contract and operating model
+- `SKILL.md`: the main operating contract
 - `agents/openai.yaml`: UI metadata for the skill picker
-- `references/`: supporting docs for goal contracts, loop protocol, maturity ladders, artifact gates, and harness usage
+- `references/`: supporting docs for mission contracts, loop protocol, finish standards, workstream gates, and harness usage
 - `scripts/superloop_cli.sh`: shell entrypoint for the harness
 - `scripts/superloop_harness.py`: stateful harness implementation
 
+## Architecture
+
+![Superloop architecture](assets/superloop-architecture-gpt-image.png)
+
+Generated with GPT Image for a README-friendly overview of the runtime flow.
+
+The runtime split is intentional:
+
+- `SKILL.md` and `references/*` define the operating contract
+- `superloop_cli.sh` is the stable shell entrypoint
+- `superloop_harness.py` owns persisted state, round recording, budget tracking, and stop-audit decisions
+- the target workspace stays separate from the harness state file
+
 ## Install
 
-Clone the repo, then copy or sync it into your Codex skills directory:
+Clone the repo, then copy or sync it into your skills directory:
 
 ```bash
 export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -29,7 +42,7 @@ mkdir -p "$CODEX_HOME/skills/superloop"
 rsync -a --delete ./ "$CODEX_HOME/skills/superloop/"
 ```
 
-After that, the skill is available as `$superloop`.
+After that, the skill is available as `$superloop` in environments that load local skills.
 
 ## Quick start
 
@@ -51,10 +64,12 @@ Initialize a new run:
 ```bash
 "$SUPERLOOP_HARNESS" init \
   --workspace /path/to/repo \
-  --goal "Validate whether users complete the first useful action" \
-  --artifact app \
-  --maturity-target product-shape-ready \
-  --scope "onboarding, primary action, analytics"
+  --goal "Ship the first usable version of this workflow" \
+  --workstream "repo workflow" \
+  --finish-standard workflow-ready \
+  --scope "code, docs, smoke checks" \
+  --max-rounds 5 \
+  --timebox-minutes 90
 ```
 
 Record a round:
@@ -62,39 +77,59 @@ Record a round:
 ```bash
 "$SUPERLOOP_HARNESS" record \
   --workspace /path/to/repo \
-  --hypothesis "Reducing setup friction increases first-session completion" \
-  --change "remove one blocking onboarding field" \
-  --round-gate "A new user reaches the primary action in one session" \
+  --hypothesis "Simplifying setup will unblock the main path" \
+  --change "remove one blocking step and update the smoke check" \
+  --round-gate "A fresh run completes once without manual rescue" \
   --round-gate-result hard-pass \
-  --stage-status stage-complete \
-  --next-round "wire and verify the activation event"
+  --gate-status gate-complete \
+  --next-round "tighten the fallback path and verify it"
 ```
+
+## Contract model
+
+The harness contract centers on:
+
+- `Goal`
+- `Finish Standard`
+- `Success Signal`
+- `Success Direction`
+- `Current Gate`
+- `Scope`
+- `Constraints`
+- `Stop Rule`
+- `Max Rounds`
+- `Timebox Minutes`
+
+That contract is what lets the agent behave like an accountable execution worker instead of a one-shot assistant.
+
+In practice, this behaves more like an `auto research` or `vibe coding` harness than a one-shot coding command: the CEO keeps the mission and constraints stable, the coding agent keeps shipping rounds, and the harness keeps the loop honest.
 
 ## State model
 
-By default, the harness stores state outside the product repo:
+By default, the harness stores state outside the target workspace:
 
 ```text
 ~/.codex/state/superloop/<workspace-key>.json
 ```
 
-That lets the loop resume across turns without dirtying the target workspace.
+That lets the loop resume across turns without dirtying the repo it is working on.
 
 ## When to use Superloop
 
-Use `superloop` when you want Codex to:
+Use `superloop` when you want the agent to:
 
-- keep a product goal stable across rounds
-- separate `Round Gate`, `Stage Gate`, and `Stop Rule`
+- keep a mission stable across rounds
+- separate `Round Gate`, `Current Gate`, and `Stop Rule`
+- spend a visible round or time budget
 - verify each round mechanically
 - keep or discard changes based on evidence
-- continue until the explicit stop condition is actually met
+- stop for either success, stop rule, or budget exhaustion
 
 Do not use it for:
 
-- narrow one-off bug fixes
-- pure brainstorming with no execution gate
-- refactors that have no product-validation loop
+- narrow one-off fixes
+- pure brainstorming with no execution loop
+- tasks where every round still depends on repeated human intervention
 
 ## Development
 

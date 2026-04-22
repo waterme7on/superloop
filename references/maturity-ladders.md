@@ -1,89 +1,79 @@
-# Maturity Ladders
+# Finish Standards
 
-Use this reference when the user's goal sounds broader than a single UX round, especially when they say things like:
-
-- `真正的商业产品`
-- `beta`
-- `生产可用`
-- `production-ready`
-- `可运营`
+Use this reference when the user's goal sounds broader than a single round and you need to calibrate what "done" should mean.
 
 The rule is simple:
 
-- do not collapse a higher maturity target into a lower stage gate
-- if the user did not specify a maturity target, infer the nearest one from their wording
-- if the inferred stop rule is weaker than the implied maturity, tighten it
+- do not collapse a higher finish standard into a weaker current gate
+- if the user did not specify a finish standard, infer the nearest one from their wording
+- if the inferred stop rule is weaker than the implied finish standard, tighten it
 
-## Default maturity bands
+## Standard bands
 
-### Demo-ready
+### Prototype-ready
 
 This usually means:
 
-- one convincing happy-path demo works
+- one convincing end-to-end slice is real
 - manual setup is acceptable
 - local-only state is acceptable
-- missing monitoring is acceptable
-- rough edges are okay if the demo story is clear
+- rough edges are acceptable if the mission is demonstrated clearly
 
 This does not mean:
 
-- real users can rely on it
-- cross-device continuity exists
-- operations are safe
+- stable repeated execution
+- safe unattended looping
+- operational durability
 
-### Product-shape-ready
+### Workflow-ready
 
 This usually means:
 
-- the product has a credible brand and information architecture
-- the main journey works on the target surfaces
-- a skeptical user can understand what the product is for
-- the artifact looks like a real product, not only a prototype fragment
+- the main workflow works consistently enough to use
+- the critical checks or smoke coverage exist
+- the next operator can understand what to run
+- the biggest failure mode is visible
 
 This does not mean:
 
-- real accounts exist
-- cloud persistence exists
-- reliability expectations are met
+- safe unattended autonomy
+- production-grade observability
 
-### Beta-ready
+### Operator-ready
 
 This usually means:
 
-- real accounts or identity exist
-- the core user data is persisted server-side
-- the main journey works across sessions and usually across devices
-- import or core data handling is reliable enough for limited real users
-- basic analytics and error reporting exist
-- the main path has automated verification or serious smoke coverage
+- the user can hand a bounded mission to the harness with limited oversight
+- state survives across turns
+- stop reasons are explicit
+- budget usage is visible
+- the main loop is understandable to another operator
 
 ### Production-ready
 
 This usually means:
 
-- the beta-ready requirements are met
-- permissions, abuse boundaries, and security basics exist
-- data durability and recovery are acceptable
-- observability and incident debugging are in place
-- deployment and rollback posture are real, not ad hoc
+- the operator-ready requirements are met
+- observability is credible
+- recovery or rollback is credible
+- safety boundaries are explicit
 - operational ownership is believable
 
 ## Heuristics by wording
 
-- `展示`, `demo`, `演示`, `一图流` usually imply `demo-ready`
-- `像一个真正的产品`, `商业产品`, `可售卖` usually imply at least `product-shape-ready`, often `beta-ready`
-- `给用户用`, `可用`, `真实用户` usually imply at least `beta-ready`
+- `先做出来`, `先给我一个能看的版本` usually imply `prototype-ready`
+- `先把主流程跑通`, `能稳定执行` usually imply `workflow-ready`
+- `我希望以后可以放心让它自己跑`, `能交给 agent 自己迭代` usually imply `operator-ready`
 - `生产可用`, `production`, `线上可靠` imply `production-ready`
 
-When in doubt, prefer the higher maturity target unless the user has also given hard constraints that clearly force a lower one.
+When in doubt, prefer the higher finish standard unless the user has also given hard constraints that clearly force a lower one.
 
 ## Stop-audit shortcut
 
 Before stopping, ask:
 
-1. Did we only finish the current stage, or the full maturity target?
-2. Are critical gaps still open for this maturity band?
-3. Would a skeptical operator still call this a prototype?
+1. Did we only finish the current gate, or the full finish standard?
+2. Are critical gaps still open for this band?
+3. Would a skeptical CEO still say the job is unfinished?
 
-If yes, it is not `goal complete` yet.
+If yes, it is not `mission complete` yet.
