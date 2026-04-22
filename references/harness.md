@@ -19,7 +19,7 @@ Run this first in the current workspace:
 "$SUPERLOOP_HARNESS" resume
 ```
 
-If an active run exists, use its stored contract, next round, blocker, and stop rule instead of re-inferring them from scratch.
+If an active run exists, use its stored contract, next round, blocker, budget, and stop rule instead of re-inferring them from scratch.
 
 ### Init
 
@@ -28,15 +28,25 @@ Run `init` only when `resume` reports no active run:
 ```bash
 "$SUPERLOOP_HARNESS" init \
   --goal "..." \
-  --artifact "app|storefront|landing-page|mvp" \
-  --maturity-target "demo-ready|product-shape-ready|beta-ready|production-ready" \
-  --metric "..." \
-  --stage-gate "..." \
+  --workstream "repo workflow|feature|tooling|docs|agent harness|deploy" \
+  --finish-standard "prototype-ready|workflow-ready|operator-ready|production-ready" \
+  --success-signal "..." \
+  --success-direction "higher|lower" \
+  --current-gate "..." \
   --scope "..." \
-  --constraint "..."
+  --constraint "..." \
+  --max-rounds 5 \
+  --timebox-minutes 90
 ```
 
-If `stop-rule` is omitted, the harness writes a maturity-aware default that is stronger than "main path unblocked."
+Legacy compatibility:
+
+- `--artifact` still maps to `--workstream`
+- `--maturity-target` still maps to `--finish-standard`
+- `--metric` still maps to `--success-signal`
+- `--stage-gate` still maps to `--current-gate`
+
+If `stop-rule` is omitted, the harness writes a budget-aware default that is stronger than "do one round and stop."
 
 ### Record
 
@@ -48,14 +58,14 @@ After each substantial round:
   --change "..." \
   --round-gate "..." \
   --round-gate-result "hard-pass|soft-pass|fail" \
-  --stage-status "stage-complete|stage-in-progress|stage-blocked" \
+  --gate-status "gate-complete|gate-in-progress|gate-blocked" \
   --next-round "..."
 ```
 
 Optional inputs:
 
 - `--remaining-gap "..."` may be repeated
-- `--top-level-goal-met`
+- `--mission-complete`
 - `--stop-rule-satisfied`
 - `--blocked-by "..."`
 - `--resume-condition "..."`
@@ -70,17 +80,19 @@ The harness returns a verdict:
 
 Use that verdict for loop control.
 
+It also returns a `budget_status` object so the caller can see elapsed time, rounds used, remaining budget, and whether the loop has hit a round or time cap.
+
 ## State model
 
-State is stored outside the product workspace by default:
+State is stored outside the target workspace by default:
 
 - `~/.codex/state/superloop/<workspace-key>.json`
 
-This keeps resume data across turns without dirtying the target repository.
+This keeps resume data across turns without dirtying the target repo or deliverable folder.
 
 ## Guardrails
 
-- `stop` requires either `top-level goal met` or `stop rule satisfied`
-- `stop` is blocked if `remaining_gap_ledger` is not empty
+- `stop` can mean either mission complete or budget exhausted; say which one
 - `pause` is preferred when the next move would exceed the contract or a real blocker exists
-- `continue` is the default when the goal is not done and the loop can still move safely
+- `continue` is the default when the mission is not done, the budget is still open, and the loop can still move safely
+- if the loop stops because the budget was exhausted, preserve the next-round hint when one exists

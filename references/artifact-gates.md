@@ -1,94 +1,105 @@
-# Artifact Gates
+# Workstream Gates
 
-Use this reference when the user has clearly named the artifact but has not given a precise stage gate yet.
+Use this reference when the user has named the workstream but has not given a precise current gate yet.
 
 The rule is simple:
 
 - pick the nearest gate that can be mechanically verified now
-- prefer flow completion before conversion optimization
-- if the target metric cannot be observed yet, add the instrumentation gate before trying to optimize that metric
-- do not optimize copy, trust, or design until the core path works
-- when a gate passes, promote the next gate instead of stopping the loop unless the top-level goal is already met
+- prefer a working end-to-end slice before optimization
+- if the mission depends on missing observability, add the observability gate before trying to optimize
+- when a gate passes, promote the next gate instead of stopping the loop unless the mission is already complete
 
-## Storefront
-
-Default gate progression:
-
-1. product page renders correctly
-2. variant or quantity selection works if applicable
-3. add-to-cart works
-4. cart renders correctly
-5. checkout entry works
-6. analytics for key commerce actions fire
-7. only then optimize conversion surfaces
-
-Good phase-gate examples:
-
-- `A visitor can land on a product page and add the item to cart without errors`
-- `Cart drawer opens, updates quantity, and reaches checkout`
-- `view_item`, `add_to_cart`, and `begin_checkout` events fire`
-
-## Landing page
+## Repo feature or code path
 
 Default gate progression:
 
-1. page loads fast and without broken sections
-2. primary CTA is above the fold and obvious
-3. CTA destination works
-4. signup, waitlist, or lead form submits successfully
-5. confirmation state is visible
-6. event tracking exists
-7. only then test messaging or trust variations
+1. the target code path runs without crashing
+2. the main change is visible or observable
+3. the targeted checks pass
+4. the failure path is understandable
+5. only then optimize quality, speed, or polish
 
-Good phase-gate examples:
+Good gate examples:
 
-- `Primary CTA is visible and leads to a working form`
-- `Lead form submits successfully on desktop and mobile`
-- `Hero, social proof, and CTA render cleanly with no blocking layout issues`
+- `The command runs once without manual rescue`
+- `The feature works on the main happy path and the targeted smoke check passes`
+- `The failure mode is logged clearly enough to debug on the next round`
 
-## App onboarding or activation flow
+## Tooling or automation
 
 Default gate progression:
 
-1. first-run path opens without errors
-2. user can complete the primary action once
-3. success or completion state is visible
-4. activation event is logged
-5. obvious friction points are reduced
-6. only then optimize completion rate
+1. setup succeeds
+2. the tool runs once end to end
+3. the output is stable and in the right place
+4. the most important failure mode is visible
+5. only then improve ergonomics or speed
 
-Good phase-gate examples:
+Good gate examples:
 
-- `A new user can reach the first useful action in one session`
-- `Primary action completes without manual intervention`
-- `Activation event fires on successful completion`
+- `A fresh machine can run the setup once without undocumented steps`
+- `The automation completes once and produces the expected output`
+- `The command exits with a clear message when the dependency is missing`
 
-## Content or audience-driven MVP
+## Agent workflow or harness
 
 Default gate progression:
 
-1. core offer is visible
-2. audience lands on the correct page or funnel entry
-3. primary capture action works
-4. attribution or source tagging exists
-5. only then test channel-specific message variants
+1. init or resume works
+2. one round can be recorded
+3. continue or pause decisions are explicit
+4. budget stop conditions work
+5. only then improve delegation quality or heuristics
 
-Good phase-gate examples:
+Good gate examples:
 
-- `Traffic from a post lands on a matching offer page and can join the waitlist`
-- `The main opt-in flow works and source is recorded`
+- `The harness can resume state from disk and choose the recorded next round`
+- `A round record produces an unambiguous continue, pause, or stop verdict`
+- `The loop stops when max rounds or the timebox is reached`
+
+## Docs, research, or handoff
+
+Default gate progression:
+
+1. the deliverable exists in the right path and format
+2. the main conclusion or handoff is explicit
+3. evidence or references are attached
+4. next steps or decisions are clear
+5. only then optimize tone or presentation
+
+Good gate examples:
+
+- `The handoff doc exists and the major decisions are explicit`
+- `The research note contains evidence, synthesis, and next actions`
+- `The README is enough for a fresh operator to start`
+
+## Deployment or operations
+
+Default gate progression:
+
+1. the service starts
+2. the health check passes
+3. logs or traces are visible
+4. rollback or recovery is known
+5. only then optimize throughput or polish
+
+Good gate examples:
+
+- `The service boots and the health endpoint responds`
+- `A failed deploy leaves behind enough information to recover`
+- `Rollback is documented and the main smoke check passes after deploy`
 
 ## Selection heuristics
 
 If several gates are possible, prefer:
 
-1. the one closest to revenue or activation
+1. the one closest to the mission
 2. the one with the least external dependency
 3. the one that can be verified today
 
 Avoid these mistakes:
 
-- choosing a final business outcome as the first gate
-- testing copy before the destination flow works
-- trying to improve a live metric before the event or attribution path exists
-- adding analytics after several rounds of untracked changes
+- choosing a vague final outcome as the first gate
+- optimizing polish before the main path works
+- trying to improve the loop before the core workflow can be observed
+- adding observability only after several opaque rounds

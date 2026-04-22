@@ -1,14 +1,12 @@
-# Goal Contract
+# Mission Contract
 
-Use this reference when the user knows the destination but not the setup for Superloop.
-
-The loop works only when the target is constrained enough to guide tactics.
+Use this reference when the user knows the destination but has not yet turned it into a usable operating contract for the harness.
 
 Important:
 
-- This is primarily for Codex to construct internally
-- The user does not need to manually fill every field
-- When possible, derive the contract from a short conversation plus repo context
+- this is primarily for the agent to construct internally
+- the user does not need to fill every field by hand
+- the contract should be tight enough to guide autonomous rounds without ceremony
 
 ## Fast intake mode
 
@@ -16,101 +14,118 @@ If the user gives only a rough goal, collect the contract with the smallest usef
 
 Suggested sequence:
 
-1. What are we trying to validate right now?
-2. What surface are we changing?
-3. What absolutely must work in this phase?
+1. What are we trying to get done?
+2. Which repo, workflow, or deliverable are we working on?
+3. What absolutely must become true in this phase?
 4. What hard constraints should I respect?
-5. When should I stop optimizing and just unblock the path?
+5. When should I stop, escalate, or hand control back?
+6. How many rounds or how much time should I spend?
 
-After that, Codex should translate the answers into:
+After that, translate the answers into:
 
 - `Goal`
-- `Metric`
-- `Direction`
-- `Stage Gate`
+- `Success Signal`
+- `Success Direction`
+- `Current Gate`
 - `Scope`
 - `Constraints`
 - `Stop Rule`
+- `Max Rounds`
+- `Timebox Minutes`
 
-Once that contract is clear enough, Codex should execute the current round inside it without asking for per-step approval, and continue into later rounds until the stop condition is met.
-
-The stage gate is the current milestone inside the contract. Passing it usually promotes the next gate. It does not, by itself, mean the loop should stop or ask for fresh permission.
+Once that contract is clear enough, the agent should execute the current round inside it without asking for per-step approval and continue into later rounds until the stop condition is met.
 
 ## Default inference rules
 
 When the user does not provide all fields, prefer these defaults:
 
-- `Direction`
-  - higher for conversion, activation, signup, add-to-cart
-  - lower for errors, drop-offs, latency, friction
-- `Stage Gate`
-  - if the business metric is slow or noisy, use the nearest mechanical gate first
+- `Success Signal`
+  - use the nearest observable engineering or deliverable signal
+- `Current Gate`
+  - if the end goal is noisy or slow, use the nearest mechanically verifiable gate first
 - `Scope`
-  - infer from repo structure and the named artifact
+  - infer from the named workstream and repo layout
 - `Constraints`
-  - infer common MVP constraints if the user is clearly in speed mode
+  - infer common speed-mode constraints when the user is clearly in execution mode
 - `Stop Rule`
-  - if the user does not specify one, initialize a maturity-aware default that is stronger than `main path unblocked`
-  - do not treat `stage complete` as `goal complete` unless the maturity target and gap ledger both support that claim
+  - if the user does not specify one, stop when the mission is materially achieved, the budget is exhausted, or the loop is blocked by a CEO-level decision
+- `Budget`
+  - if the user does not specify one and the mission is open-ended, infer a small default budget, usually `3 rounds` or `90 minutes`
 
 ## Required fields
 
-- `Goal`: what outcome matters
-- `Metric`: what number represents progress
-- `Direction`: higher or lower
-- `Stage Gate`: what counts as success for this phase
-- `Scope`: where changes may happen
-- `Constraints`: time, budget, brand, legal, infra, or staffing limits
-- `Stop Rule`: when to stop, pivot, or ask for help
+- `Goal`
+- `Finish Standard`
+- `Success Signal`
+- `Success Direction`
+- `Current Gate`
+- `Scope`
+- `Constraints`
+- `Stop Rule`
 
-These fields define the boundary of autonomous action for the current round and any later rounds that stay inside the same contract.
+Optional but strongly recommended:
 
-Crossing into the next stage gate is normal progression when it follows the same goal, scope, constraints, and stop rule. Ask again only when the next move would exceed those boundaries.
+- `Max Rounds`
+- `Timebox Minutes`
+
+These fields define the boundary of autonomous action for the current round and later rounds that stay inside the same contract.
 
 ## Default framing
 
-Convert a broad product wish into:
+Convert a broad request into:
 
-1. **North-star goal**
-   - the larger result the user wants
-2. **Current phase goal**
-   - the next gate that can be verified now
+1. **Mission**
+   - the actual outcome the user cares about
+2. **Current gate**
+   - the next thing that must become true
 3. **Round hypothesis**
-   - the single thing this iteration is trying to improve
+   - the single change this iteration is trying to prove or disprove
+4. **Budget**
+   - the amount of autonomy the user is granting before a check-in
 
 ## Good examples
 
-### Storefront
+### Repo workflow
 
-- Goal: validate if families will click through to a water-play product offer
-- Metric: product-page-to-add-to-cart rate
-- Direction: higher
-- Stage Gate: product page, cart, checkout entry, and key commerce events all work end to end
-- Scope: landing page, product page, cart, analytics
-- Constraints: ship in one night, no CMS, no redesign of the full brand system
-- Stop Rule: if three instrumented traffic rounds show no improvement, revisit offer or traffic angle
+- Goal: make the main workflow usable without manual rescue
+- Finish Standard: workflow-ready
+- Success Signal: a fresh run completes once and the targeted checks pass
+- Current Gate: setup, execution, and smoke verification all complete end to end
+- Scope: CLI, setup docs, smoke checks
+- Constraints: no large refactor, no paid services, finish today
+- Stop Rule: stop when the workflow is usable or after 5 rounds, whichever comes first
 
-### App
+### Agent harness
 
-- Goal: validate whether users complete the first useful action
-- Metric: first-session primary-action completion rate
-- Direction: higher
-- Stage Gate: 5 of 10 test users can complete the action without help
-- Scope: onboarding, primary action flow, event logging
-- Constraints: single-platform MVP, no advanced account system
-- Stop Rule: if the main action remains unclear after two UX simplification rounds, revisit the product promise
+- Goal: make the harness continue autonomously until it either succeeds or spends its agreed budget
+- Finish Standard: operator-ready
+- Success Signal: the harness persists state, records each round, and stops for budget or blocker reasons without ambiguity
+- Current Gate: init, resume, record, and budget stop conditions all work
+- Scope: skill docs, harness script, smoke tests
+- Constraints: no external service dependency
+- Stop Rule: stop when round and time budgets work reliably or after 90 minutes
+
+### Docs or research deliverable
+
+- Goal: produce a handoff document the user can immediately use
+- Finish Standard: prototype-ready
+- Success Signal: the document exists in the right path and format, and the major decisions are explicit
+- Current Gate: first acceptable draft exists with evidence and decisions
+- Scope: markdown docs only
+- Constraints: no extra tooling
+- Stop Rule: stop when the handoff is reviewable or after 3 rounds
 
 ## Heuristics
 
-- Prefer one primary metric, at most one guard metric
-- Make the current phase gate easier than the final business goal
-- If the real business metric is slow, define a shorter proxy for the current round
-- If the user only gives a final outcome, infer a staged gate and say so explicitly
+- prefer one primary success signal
+- make the current gate easier than the final mission
+- if the final outcome is slow to judge, use the nearest mechanical gate first
+- if the user gives only the destination, infer a gate and a budget and say so explicitly
 
 ## Anti-patterns
 
-- Goal without metric
-- Metric without stage gate
-- One round trying to change product, messaging, audience, and pricing at once
-- Optimization without clear constraints
-- Using vanity metrics when a funnel metric is available
+- goal without a success signal
+- success signal without a current gate
+- one round trying to change implementation, architecture, docs, and deployment all at once
+- optimization with no scope or budget
+- pretending `gate complete` means `mission complete`
