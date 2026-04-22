@@ -1,0 +1,8 @@
+interface:
+  display_name: "Superloop"
+  short_description: "Maturity-aware product loop for demos, betas, and real products"
+  brand_color: "#0F766E"
+  default_prompt: "Use $superloop to turn a product goal into maturity-aware staged loops, keep round gates and stop rules separate, and execute the next best iteration."
+
+policy:
+  allow_implicit_invocation: false
