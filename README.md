@@ -85,6 +85,10 @@ Record a round:
   --next-round "tighten the fallback path and verify it"
 ```
 
+For terminal rounds, omit `--remaining-gap` or use a no-gap sentinel such as `none`.
+The harness now normalizes common values like `none` and `no remaining gaps` so a completed
+run stops cleanly instead of asking for another round.
+
 ## Contract model
 
 The harness contract centers on:

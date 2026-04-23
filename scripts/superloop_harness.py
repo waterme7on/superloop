@@ -118,6 +118,39 @@ def normalize_finish_standard(value: str | None) -> str | None:
     return LEGACY_FINISH_STANDARD_MAP.get(lowered, lowered)
 
 
+NO_GAP_SENTINELS = {
+    "",
+    "none",
+    "no gaps",
+    "no gap",
+    "no remaining gaps",
+    "no remaining gap",
+    "no concrete gaps",
+    "no concrete gap",
+    "none remaining",
+    "nothing remaining",
+    "n/a",
+    "na",
+}
+
+
+def normalize_remaining_gaps(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    raw_items = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item).strip()
+        lowered = text.lower()
+        if lowered in NO_GAP_SENTINELS:
+            continue
+        if lowered.startswith("no ") and any(token in lowered for token in ["gap", "gaps", "remaining"]):
+            continue
+        normalized.append(text)
+    return normalized
+
+
 def infer_finish_standard(goal: str | None, explicit: str | None) -> str:
     normalized = normalize_finish_standard(explicit)
     if normalized:
@@ -277,6 +310,7 @@ def normalize_round_record(raw: dict[str, Any]) -> dict[str, Any]:
     record = dict(raw)
     record["gate_status"] = gate_status
     record["mission_complete"] = bool(mission_complete)
+    record["remaining_gap_ledger"] = normalize_remaining_gaps(record.get("remaining_gap_ledger"))
     record.pop("stage_status", None)
     record.pop("top_level_goal_met", None)
     return record
@@ -289,7 +323,7 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
     state["guidance"] = {
         "expected_gap_checks": expected_gap_checks(state["contract"]["finish_standard"])
     }
-    state["remaining_gap_ledger"] = state.get("remaining_gap_ledger", [])
+    state["remaining_gap_ledger"] = normalize_remaining_gaps(state.get("remaining_gap_ledger"))
     state["rounds"] = [normalize_round_record(round_record) for round_record in state.get("rounds", [])]
     state["next_round"] = state.get("next_round")
     state["blocked_by"] = state.get("blocked_by")
@@ -464,10 +498,13 @@ def resume_command(args: argparse.Namespace) -> int:
     last_round = state["rounds"][-1] if state.get("rounds") else None
     budget = budget_snapshot(state)
     next_actions = []
-    if state.get("status") == "paused":
+    if state.get("status") == "completed":
+        if state.get("stop_reason") == "budget-exhausted":
+            next_actions.append("The recorded budget is exhausted; reset or widen the contract before continuing.")
+        else:
+            next_actions.append("The recorded run is already complete. Start a new run only if the mission or contract changed.")
+    elif state.get("status") == "paused":
         next_actions.append("Resolve the blocker or narrow the contract before resuming.")
-    if state.get("stop_reason") == "budget-exhausted":
-        next_actions.append("The recorded budget is exhausted; reset or widen the contract before continuing.")
     elif state.get("next_round"):
         next_actions.append(f"Resume with the recorded next round: {state['next_round']}")
     else:
@@ -521,7 +558,9 @@ def record_command(args: argparse.Namespace) -> int:
     if gate_status not in GATE_STATUSES:
         raise ValueError(f"Unexpected gate status: {args.gate_status}")
 
-    remaining_gap_ledger = args.remaining_gap or state.get("remaining_gap_ledger", [])
+    remaining_gap_ledger = normalize_remaining_gaps(args.remaining_gap)
+    if not remaining_gap_ledger:
+        remaining_gap_ledger = normalize_remaining_gaps(state.get("remaining_gap_ledger", []))
     blocked_by = args.blocked_by
     resume_condition = args.resume_condition
 
