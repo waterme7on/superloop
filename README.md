@@ -59,6 +59,10 @@ Resume an existing run:
 "$SUPERLOOP_HARNESS" resume --workspace /path/to/repo
 ```
 
+If the ask changed in the same workspace, do not silently continue the loaded run.
+Call `init` without `--continue-existing` and Superloop will archive the previous run
+before it starts a fresh mission.
+
 Initialize a new run:
 
 ```bash
@@ -70,6 +74,26 @@ Initialize a new run:
   --scope "code, docs, smoke checks" \
   --max-rounds 5 \
   --timebox-minutes 90
+```
+
+Intentionally keep the same mission and merge updated contract fields:
+
+```bash
+"$SUPERLOOP_HARNESS" init \
+  --workspace /path/to/repo \
+  --goal "Tighten the current mission without resetting history" \
+  --continue-existing
+```
+
+Preflight a risky stage:
+
+```bash
+"$SUPERLOOP_HARNESS" preflight \
+  --workspace /path/to/repo \
+  --stage deploy \
+  --require-env VERCEL_TOKEN \
+  --require-env VERCEL_PROJECT_ID \
+  --optional-env SENTRY_AUTH_TOKEN
 ```
 
 Record a round:
@@ -116,7 +140,14 @@ By default, the harness stores state outside the target workspace:
 ~/.codex/state/superloop/<workspace-key>.json
 ```
 
-That lets the loop resume across turns without dirtying the repo it is working on.
+Archived prior runs for the same workspace live under:
+
+```text
+~/.codex/state/superloop/history/<workspace-key>/
+```
+
+That lets the loop resume across turns, start a safe new mission in the same repo, and
+keep old runs audit-friendly without dirtying the repo it is working on.
 
 ## When to use Superloop
 
