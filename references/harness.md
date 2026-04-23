@@ -72,6 +72,10 @@ Optional inputs:
 - `--cannot-continue`
 - `--would-exceed-contract`
 
+If a round is actually complete, omit `--remaining-gap` or use a no-gap sentinel such as
+`--remaining-gap "none"`. The harness normalizes common no-gap strings so a human-style
+completion note does not accidentally force an extra round.
+
 The harness returns a verdict:
 
 - `continue`
