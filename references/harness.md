@@ -19,7 +19,12 @@ Run this first in the current workspace:
 "$SUPERLOOP_HARNESS" resume
 ```
 
-If an active run exists, use its stored contract, next round, blocker, budget, and stop rule instead of re-inferring them from scratch.
+If an active run exists, use its stored contract, next round, blocker, budget, and stop rule
+instead of re-inferring them from scratch.
+
+If `resume` loads a run but the user ask has clearly changed, do not silently inherit the old
+contract. Start a fresh mission with `init` and reserve `init --continue-existing` for cases
+where the mission is intentionally the same.
 
 ### Init
 
@@ -39,6 +44,12 @@ Run `init` only when `resume` reports no active run:
   --timebox-minutes 90
 ```
 
+Safe same-workspace reset:
+
+- plain `init` now starts a fresh mission and archives the previously active run for auditability
+- `--continue-existing` is required before `init` will merge into the currently loaded run
+- `--reset` still starts a fresh mission, but now archives the previous run before replacing it
+
 Legacy compatibility:
 
 - `--artifact` still maps to `--workstream`
@@ -47,6 +58,23 @@ Legacy compatibility:
 - `--stage-gate` still maps to `--current-gate`
 
 If `stop-rule` is omitted, the harness writes a budget-aware default that is stronger than "do one round and stop."
+
+### Preflight
+
+For stages that depend on environment configuration, run a lightweight preflight first:
+
+```bash
+"$SUPERLOOP_HARNESS" preflight \
+  --stage deploy \
+  --require-env VERCEL_TOKEN \
+  --optional-env SENTRY_AUTH_TOKEN
+```
+
+The harness will:
+
+- fail fast on missing required env vars
+- warn on missing optional env vars
+- return a small status card with classification, blocker, and recommended next action
 
 ### Record
 
@@ -91,6 +119,7 @@ It also returns a `budget_status` object so the caller can see elapsed time, rou
 State is stored outside the target workspace by default:
 
 - `~/.codex/state/superloop/<workspace-key>.json`
+- archived prior runs: `~/.codex/state/superloop/history/<workspace-key>/`
 
 This keeps resume data across turns without dirtying the target repo or deliverable folder.
 
