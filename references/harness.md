@@ -7,9 +7,14 @@ Use the bundled CLI instead of carrying Superloop state only in prose.
 Set the path once:
 
 ```bash
-export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-export SUPERLOOP_HARNESS="$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh"
+export SUPERLOOP_HARNESS="${SUPERLOOP_HARNESS:-$HOME/.superloop/superloop/scripts/superloop_cli.sh}"
 ```
+
+Installed host paths are also valid:
+
+- Codex: `$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh`
+- Claude Code: `$CLAUDE_HOME/skills/superloop/scripts/superloop_cli.sh`
+- Generic CLI: `$SUPERLOOP_HOME/superloop/scripts/superloop_cli.sh`
 
 ### Resume
 
@@ -114,12 +119,44 @@ Use that verdict for loop control.
 
 It also returns a `budget_status` object so the caller can see elapsed time, rounds used, remaining budget, and whether the loop has hit a round or time cap.
 
+### Timeline / Report
+
+Render a human-readable ledger without relying on chat history:
+
+```bash
+"$SUPERLOOP_HARNESS" timeline --workspace /path/to/repo
+"$SUPERLOOP_HARNESS" report --workspace /path/to/repo --format json
+```
+
+The markdown report includes the mission contract, budget, round ledger, blockers,
+resume condition, stop reason, state path, installed path, and harness path.
+
+### Doctor
+
+Check which host adapter is active and whether an installed copy has drifted:
+
+```bash
+"$SUPERLOOP_HARNESS" doctor --host codex --source /path/to/superloop
+"$SUPERLOOP_HARNESS" doctor --host claude-code --source /path/to/superloop
+"$SUPERLOOP_HARNESS" doctor --host generic --source /path/to/superloop
+```
+
+Use `--check` when the command should return non-zero on missing or drifted installs.
+
+When `record` captures a blocked or failed round, the harness also stores a
+stable `failure_signature` and `failure_repeat_count`. If the same failure
+appears again, the returned next actions warn against another identical retry.
+
 ## State model
 
 State is stored outside the target workspace by default:
 
-- `~/.codex/state/superloop/<workspace-key>.json`
-- archived prior runs: `~/.codex/state/superloop/history/<workspace-key>/`
+- explicit: `$SUPERLOOP_STATE_HOME/<workspace-key>.json`
+- neutral runtime: `$SUPERLOOP_HOME/state/<workspace-key>.json`
+- Codex adapter: `$CODEX_HOME/state/superloop/<workspace-key>.json`
+- Claude Code adapter: `$CLAUDE_HOME/state/superloop/<workspace-key>.json`
+- generic CLI: `~/.superloop/state/<workspace-key>.json`
+- archived prior runs: `<state-home>/history/<workspace-key>/`
 
 This keeps resume data across turns without dirtying the target repo or deliverable folder.
 

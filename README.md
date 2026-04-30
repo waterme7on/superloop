@@ -1,6 +1,6 @@
 # Superloop
 
-`superloop` is a harnessed skill for iterative vibe coding.
+`superloop` is a host-agnostic harness for iterative agent work.
 
 The core idea is simple:
 
@@ -14,10 +14,12 @@ This repo includes one ready-to-run implementation for local skill environments 
 ## What is in this repo
 
 - `SKILL.md`: the main operating contract
-- `agents/openai.yaml`: UI metadata for the skill picker
+- `agents/openai.yaml`: Codex/OpenAI-host metadata for the skill picker
 - `references/`: supporting docs for mission contracts, loop protocol, finish standards, workstream gates, and harness usage
+- `docs/`: host-specific install notes for Codex, Claude Code, and direct CLI usage
 - `scripts/superloop_cli.sh`: shell entrypoint for the harness
 - `scripts/superloop_harness.py`: stateful harness implementation
+- `scripts/install.sh`: host-aware install/sync wrapper
 
 ## Architecture
 
@@ -34,23 +36,40 @@ The runtime split is intentional:
 
 ## Install
 
-Clone the repo, then copy or sync it into your skills directory:
+Choose the host you want to use:
 
 ```bash
-export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$CODEX_HOME/skills/superloop"
-rsync -a --delete ./ "$CODEX_HOME/skills/superloop/"
+# Codex
+./scripts/install.sh --host codex
+
+# Claude Code
+./scripts/install.sh --host claude-code
+
+# Generic CLI copy under ~/.superloop/superloop
+./scripts/install.sh --host generic
 ```
 
-After that, the skill is available as `$superloop` in environments that load local skills.
+The installed copy can be checked later:
+
+```bash
+./scripts/superloop_cli.sh doctor --host codex
+./scripts/superloop_cli.sh doctor --host claude-code
+./scripts/superloop_cli.sh doctor --host generic
+```
+
+Host-specific notes live in:
+
+- [docs/install-codex.md](docs/install-codex.md)
+- [docs/install-claude-code.md](docs/install-claude-code.md)
+- [docs/install-generic-cli.md](docs/install-generic-cli.md)
+- [docs/host-adapters.md](docs/host-adapters.md)
 
 ## Quick start
 
-Set the harness path:
+Run the harness directly from the source checkout or from the installed host path:
 
 ```bash
-export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-export SUPERLOOP_HARNESS="$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh"
+export SUPERLOOP_HARNESS="$(pwd)/scripts/superloop_cli.sh"
 ```
 
 Resume an existing run:
@@ -109,6 +128,17 @@ Record a round:
   --next-round "tighten the fallback path and verify it"
 ```
 
+Render the visible run ledger:
+
+```bash
+"$SUPERLOOP_HARNESS" timeline --workspace /path/to/repo
+"$SUPERLOOP_HARNESS" report --workspace /path/to/repo --format json
+```
+
+Blocked rounds also carry a failure classification, stable failure signature, and
+repeat count so the loop can summarize repeated blockers instead of spending
+more budget on identical retries.
+
 For terminal rounds, omit `--remaining-gap` or use a no-gap sentinel such as `none`.
 The harness now normalizes common values like `none` and `no remaining gaps` so a completed
 run stops cleanly instead of asking for another round.
@@ -134,10 +164,14 @@ In practice, this behaves more like an `auto research` or `vibe coding` harness 
 
 ## State model
 
-By default, the harness stores state outside the target workspace:
+By default, the harness stores state outside the target workspace. The path is host-aware:
 
 ```text
-~/.codex/state/superloop/<workspace-key>.json
+SUPERLOOP_STATE_HOME/<workspace-key>.json
+SUPERLOOP_HOME/state/<workspace-key>.json
+Codex: ~/.codex/state/superloop/<workspace-key>.json
+Claude Code: ~/.claude/state/superloop/<workspace-key>.json
+Generic CLI: ~/.superloop/state/<workspace-key>.json
 ```
 
 Archived prior runs for the same workspace live under:
@@ -159,6 +193,7 @@ Use `superloop` when you want the agent to:
 - verify each round mechanically
 - keep or discard changes based on evidence
 - stop for either success, stop rule, or budget exhaustion
+- classify blocked rounds and preflight required environment variables
 
 Do not use it for:
 
@@ -173,6 +208,8 @@ Useful checks while editing this repo:
 ```bash
 python3 -m py_compile scripts/superloop_harness.py
 ./scripts/superloop_cli.sh resume --workspace "$(pwd)"
+./scripts/superloop_cli.sh doctor --host codex --source "$(pwd)"
+./scripts/superloop_cli.sh doctor --host claude-code --source "$(pwd)"
 ```
 
 If the second command returns a warning about missing state, that is expected for a fresh workspace.
