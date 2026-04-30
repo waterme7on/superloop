@@ -38,9 +38,17 @@ Do not use this skill when the user only wants:
 Before running the first round in a workspace:
 
 ```bash
-export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-export SUPERLOOP_HARNESS="$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh"
+export SUPERLOOP_HARNESS="${SUPERLOOP_HARNESS:-$HOME/.superloop/superloop/scripts/superloop_cli.sh}"
 ```
+
+Host adapters may install the same harness under a tool-specific skills directory:
+
+- Codex: `$CODEX_HOME/skills/superloop/scripts/superloop_cli.sh`
+- Claude Code: `$CLAUDE_HOME/skills/superloop/scripts/superloop_cli.sh`
+- Generic CLI: `$SUPERLOOP_HOME/superloop/scripts/superloop_cli.sh`
+
+The harness keeps `CODEX_HOME` compatibility, but new installs should prefer
+`SUPERLOOP_HOME`, `SUPERLOOP_STATE_HOME`, or a host adapter path.
 
 Then:
 
@@ -73,6 +81,12 @@ Minimal round record example:
   --round-gate-result "hard-pass" \
   --gate-status "gate-complete" \
   --next-round "tighten failure handling and verify the fallback path"
+```
+
+Visible run report example:
+
+```bash
+"$SUPERLOOP_HARNESS" timeline --workspace /path/to/repo
 ```
 
 ## First-turn behavior

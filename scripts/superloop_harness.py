@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -15,7 +16,16 @@ from pathlib import Path
 from typing import Any
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
+HOST_CHOICES = {"auto", "generic", "codex", "claude-code"}
+HOST_ALIASES = {
+    "claude": "claude-code",
+    "claudecode": "claude-code",
+    "claude_code": "claude-code",
+    "openai": "codex",
+}
+TREE_EXCLUDED_DIRS = {".git", ".github", "__pycache__", ".pytest_cache"}
+TREE_EXCLUDED_FILES = {".DS_Store", ".superloop-install.json"}
 ROUND_GATE_RESULTS = {"hard-pass", "soft-pass", "fail"}
 GATE_STATUSES = {"gate-complete", "gate-in-progress", "gate-blocked"}
 LEGACY_GATE_STATUSES = {
@@ -69,6 +79,107 @@ def optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def normalize_host(value: str | None) -> str:
+    host = (value or "auto").strip().lower()
+    host = HOST_ALIASES.get(host, host)
+    if host not in HOST_CHOICES:
+        raise argparse.ArgumentTypeError(
+            f"host must be one of: {', '.join(sorted(HOST_CHOICES))}"
+        )
+    return host
+
+
+def path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
+def claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_HOME", Path.home() / ".claude")).expanduser()
+
+
+def superloop_home() -> Path:
+    return Path(os.environ.get("SUPERLOOP_HOME", Path.home() / ".superloop")).expanduser()
+
+
+def detect_host(explicit: str | None = None) -> str:
+    requested = normalize_host(explicit)
+    if requested != "auto":
+        return requested
+
+    env_host = os.environ.get("SUPERLOOP_HOST")
+    if env_host:
+        return normalize_host(env_host)
+
+    script_path = Path(__file__).resolve()
+    if path_is_relative_to(script_path, codex_home() / "skills"):
+        return "codex"
+    if path_is_relative_to(script_path, claude_home() / "skills"):
+        return "claude-code"
+    if "CLAUDECODE" in os.environ or "CLAUDE_CODE" in os.environ:
+        return "claude-code"
+    return "generic"
+
+
+def default_state_home(host: str) -> Path:
+    explicit_state_home = os.environ.get("SUPERLOOP_STATE_HOME")
+    if explicit_state_home:
+        return Path(explicit_state_home).expanduser()
+
+    explicit_home = os.environ.get("SUPERLOOP_HOME")
+    if explicit_home:
+        return Path(explicit_home).expanduser() / "state"
+
+    if host == "codex":
+        return codex_home() / "state" / "superloop"
+    if host == "claude-code":
+        return claude_home() / "state" / "superloop"
+    return superloop_home() / "state"
+
+
+def installed_path_for_host(host: str) -> Path:
+    if host == "codex":
+        return codex_home() / "skills" / "superloop"
+    if host == "claude-code":
+        return claude_home() / "skills" / "superloop"
+    return Path(os.environ.get("SUPERLOOP_INSTALL_PATH", superloop_home() / "superloop")).expanduser()
+
+
+def host_profile(host_arg: str | None = None) -> dict[str, Any]:
+    host = detect_host(host_arg)
+    installed_path = installed_path_for_host(host)
+    host_home = {
+        "codex": codex_home(),
+        "claude-code": claude_home(),
+        "generic": superloop_home(),
+    }[host]
+    metadata_files = {
+        "codex": ["agents/openai.yaml", "SKILL.md"],
+        "claude-code": ["SKILL.md"],
+        "generic": [],
+    }[host]
+
+    return {
+        "host": host,
+        "host_home": str(host_home),
+        "installed_path": str(installed_path),
+        "harness_path": str(installed_path / "scripts" / "superloop_cli.sh"),
+        "state_home": str(default_state_home(host)),
+        "metadata_files": metadata_files,
+    }
+
+
 def resolve_workspace_root(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
@@ -89,18 +200,14 @@ def resolve_workspace_root(explicit: str | None) -> Path:
     return Path.cwd().resolve()
 
 
-def state_home() -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-    return Path(os.environ.get("SUPERLOOP_STATE_HOME", codex_home / "state" / "superloop")).expanduser()
-
-
 def workspace_key(workspace_root: Path) -> str:
     digest = hashlib.sha1(str(workspace_root).encode("utf-8")).hexdigest()[:10]
     return f"{slugify(workspace_root.name)}-{digest}"
 
 
-def state_path_for(workspace_root: Path) -> Path:
-    return state_home() / f"{workspace_key(workspace_root)}.json"
+def state_path_for(workspace_root: Path, host_arg: str | None = None) -> Path:
+    host = detect_host(host_arg)
+    return default_state_home(host) / f"{workspace_key(workspace_root)}.json"
 
 
 def normalize_constraints(value: Any) -> list[str]:
@@ -346,10 +453,241 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def emit(payload: dict[str, Any]) -> int:
+def emit(payload: dict[str, Any], exit_code: int = 0) -> int:
     json.dump(payload, sys.stdout, indent=2, sort_keys=True, ensure_ascii=False)
     sys.stdout.write("\n")
-    return 0
+    return exit_code
+
+
+def emit_markdown(markdown: str, exit_code: int = 0) -> int:
+    sys.stdout.write(markdown.rstrip() + "\n")
+    return exit_code
+
+
+def run_git(args: list[str], cwd: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return None
+    return result.stdout.strip()
+
+
+def git_info(path: Path) -> dict[str, Any]:
+    commit = run_git(["rev-parse", "--short", "HEAD"], path)
+    branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+    status = run_git(["status", "--porcelain"], path)
+    return {
+        "branch": branch,
+        "commit": commit,
+        "dirty": bool(status),
+        "status_porcelain": status.splitlines() if status else [],
+    }
+
+
+def iter_project_files(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+
+    files: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if any(part in TREE_EXCLUDED_DIRS for part in rel.parts):
+            continue
+        if path.is_dir():
+            continue
+        if path.name in TREE_EXCLUDED_FILES or path.suffix == ".pyc":
+            continue
+        files.append(rel)
+    return files
+
+
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tree_fingerprint(root: Path) -> dict[str, Any] | None:
+    if not root.exists():
+        return None
+
+    files = {
+        str(rel): file_digest(root / rel)
+        for rel in iter_project_files(root)
+    }
+    payload = json.dumps(files, sort_keys=True).encode("utf-8")
+    return {
+        "digest": hashlib.sha1(payload).hexdigest()[:12],
+        "file_count": len(files),
+    }
+
+
+def tree_diff_summary(source: Path, destination: Path, limit: int = 25) -> dict[str, Any]:
+    if not destination.exists():
+        source_count = len(iter_project_files(source))
+        return {
+            "status": "missing",
+            "missing": [],
+            "extra": [],
+            "modified": [],
+            "total_differences": source_count,
+            "truncated": False,
+        }
+
+    source_files = set(iter_project_files(source))
+    destination_files = set(iter_project_files(destination))
+    missing = sorted(str(item) for item in source_files - destination_files)
+    extra = sorted(str(item) for item in destination_files - source_files)
+    modified = sorted(
+        str(item)
+        for item in source_files & destination_files
+        if file_digest(source / item) != file_digest(destination / item)
+    )
+    total = len(missing) + len(extra) + len(modified)
+
+    return {
+        "status": "drift" if total else "clean",
+        "missing": missing[:limit],
+        "extra": extra[:limit],
+        "modified": modified[:limit],
+        "truncated": total > limit,
+        "total_differences": total,
+    }
+
+
+def source_root(explicit: str | None = None) -> Path:
+    return Path(explicit).expanduser().resolve() if explicit else repo_root()
+
+
+def assert_safe_install_destination(destination: Path) -> None:
+    resolved = destination.expanduser().resolve()
+    if resolved == Path("/") or resolved == Path.home().resolve():
+        raise ValueError(f"Refusing to install into unsafe destination: {resolved}")
+    if resolved.name != "superloop":
+        raise ValueError(
+            f"Refusing to install into {resolved}; destination directory must be named superloop."
+        )
+
+
+def sync_project_tree(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination = destination.expanduser().resolve()
+    assert_safe_install_destination(destination)
+
+    if source == destination:
+        return
+
+    destination.mkdir(parents=True, exist_ok=True)
+    source_files = set(iter_project_files(source))
+    destination_files = set(iter_project_files(destination))
+
+    for rel in sorted(destination_files - source_files, reverse=True):
+        target = destination / rel
+        if target.exists():
+            target.unlink()
+
+    for rel in sorted(source_files):
+        src = source / rel
+        dst = destination / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+    for path in sorted(destination.rglob("*"), reverse=True):
+        rel = path.relative_to(destination)
+        if any(part in TREE_EXCLUDED_DIRS for part in rel.parts):
+            continue
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+
+
+def write_install_manifest(source: Path, destination: Path, host: str) -> None:
+    manifest = {
+        "host": host,
+        "installed_at": now_iso(),
+        "source_path": str(source),
+        "source_git": git_info(source),
+        "source_fingerprint": tree_fingerprint(source),
+        "state_home": str(default_state_home(host)),
+    }
+    (destination / ".superloop-install.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    )
+
+
+FAILURE_RULES = [
+    (
+        "config-missing",
+        ["missing", "not set", "required variable", "secret", "env", "environment variable"],
+        "Provide the missing required configuration, secret, or environment variable, then rerun the blocked step.",
+    ),
+    (
+        "auth-permission",
+        ["permission", "denied", "unauthorized", "forbidden", "authentication", "token scope"],
+        "Fix authentication, token scope, or repository/service permissions before retrying.",
+    ),
+    (
+        "workflow-config",
+        ["workflow", "yaml", "yml", "syntax", "invalid config"],
+        "Fix the workflow or configuration syntax, then rerun the smallest affected check.",
+    ),
+    (
+        "external-service",
+        ["cloudflare", "vercel", "deploy", "dns", "api", "service unavailable"],
+        "Check the external service state and credentials; pause if the next action requires an operator decision.",
+    ),
+    (
+        "contract-boundary",
+        ["contract", "scope", "ceo", "manual", "human", "approval"],
+        "Pause and ask for a contract, scope, or operator decision before continuing.",
+    ),
+]
+
+
+def classify_failure(text: str | None) -> dict[str, str] | None:
+    if not text:
+        return None
+    lowered = text.lower()
+    for code, tokens, action in FAILURE_RULES:
+        if any(token in lowered for token in tokens):
+            return {"code": code, "recommended_action": action}
+    return {
+        "code": "unknown",
+        "recommended_action": "Capture the failing command and output, then classify whether it is code, configuration, environment, or operator-blocked.",
+    }
+
+
+def normalize_name_list(values: list[str]) -> list[str]:
+    names: list[str] = []
+    for value in values:
+        names.extend(part.strip() for part in value.split(",") if part.strip())
+    return names
+
+
+def failure_signature(classification: dict[str, str] | None, blocked_by: str | None, round_gate: str) -> str | None:
+    if not classification:
+        return None
+    signature_input = "|".join(
+        [
+            classification.get("code", "unknown"),
+            (blocked_by or "").strip().lower(),
+            round_gate.strip().lower(),
+        ]
+    )
+    return hashlib.sha1(signature_input.encode("utf-8")).hexdigest()[:12]
+
+
+def repeated_failure_count(rounds: list[dict[str, Any]], signature: str | None) -> int:
+    if not signature:
+        return 0
+    return 1 + sum(1 for round_record in rounds if round_record.get("failure_signature") == signature)
 
 
 def budget_snapshot(state: dict[str, Any], additional_rounds: int = 0) -> dict[str, Any]:
@@ -407,7 +745,7 @@ def maybe_close_for_budget(state: dict[str, Any]) -> bool:
 
 def init_command(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace)
-    state_path = state_path_for(workspace_root)
+    state_path = state_path_for(workspace_root, args.host)
     state = load_state(state_path)
     timestamp = now_iso()
 
@@ -459,8 +797,12 @@ def init_command(args: argparse.Namespace) -> int:
     save_state(state_path, state)
     return emit(
         {
-            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "artifacts": {
+                "state_path": str(state_path),
+                "workspace_root": str(workspace_root),
+            },
             "budget_status": budget_snapshot(state),
+            "host": host_profile(args.host),
             "next_actions": [
                 "Run the next implementation round inside the stored contract.",
                 "After the round, call `record` before deciding whether to continue or stop.",
@@ -478,12 +820,13 @@ def init_command(args: argparse.Namespace) -> int:
 
 def resume_command(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace)
-    state_path = state_path_for(workspace_root)
+    state_path = state_path_for(workspace_root, args.host)
     state = load_state(state_path)
     if not state:
         return emit(
             {
                 "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
                 "next_actions": [
                     "Initialize a new run with `init` before trying to continue the loop."
                 ],
@@ -518,6 +861,7 @@ def resume_command(args: argparse.Namespace) -> int:
         {
             "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
             "budget_status": budget,
+            "host": host_profile(args.host),
             "next_actions": next_actions,
             "state": {
                 "blocked_by": state.get("blocked_by"),
@@ -539,12 +883,13 @@ def resume_command(args: argparse.Namespace) -> int:
 
 def record_command(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace)
-    state_path = state_path_for(workspace_root)
+    state_path = state_path_for(workspace_root, args.host)
     state = load_state(state_path)
     if not state:
         return emit(
             {
                 "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
                 "next_actions": ["Run `init` before recording a round."],
                 "status": "error",
                 "summary": "Cannot record a round without an initialized Superloop harness state.",
@@ -563,11 +908,22 @@ def record_command(args: argparse.Namespace) -> int:
         remaining_gap_ledger = normalize_remaining_gaps(state.get("remaining_gap_ledger", []))
     blocked_by = args.blocked_by
     resume_condition = args.resume_condition
+    failure_classification = None
 
     if gate_status == "gate-blocked" and not blocked_by:
         blocked_by = "Gate blocked by an unresolved dependency or contract boundary."
     if blocked_by and not resume_condition:
         resume_condition = "Remove the blocker or narrow the contract, then resume the recorded next round."
+    if blocked_by or args.round_gate_result == "fail":
+        failure_classification = classify_failure(
+            " ".join(
+                item
+                for item in [blocked_by, args.round_gate, args.round_gate_result, args.change]
+                if item
+            )
+        )
+    failure_sig = failure_signature(failure_classification, blocked_by, args.round_gate)
+    failure_repeat_count = repeated_failure_count(state.get("rounds", []), failure_sig)
 
     can_continue = not args.cannot_continue and not args.would_exceed_contract and not blocked_by
     mission_complete = args.mission_complete
@@ -634,6 +990,9 @@ def record_command(args: argparse.Namespace) -> int:
         "mission_complete": mission_complete,
         "stop_rule_satisfied": args.stop_rule_satisfied,
         "blocked_by": blocked_by,
+        "failure_classification": failure_classification,
+        "failure_repeat_count": failure_repeat_count,
+        "failure_signature": failure_sig,
         "resume_condition": resume_condition,
         "would_exceed_contract": args.would_exceed_contract,
         "cannot_continue": args.cannot_continue,
@@ -663,14 +1022,22 @@ def record_command(args: argparse.Namespace) -> int:
         next_actions.append(f"Budget is exhausted; if you reopen the contract, resume with: {next_round}")
     else:
         next_actions.append("The harness allows a normal stop for this run.")
+    if failure_repeat_count > 1:
+        next_actions.append(
+            f"This failure signature has appeared {failure_repeat_count} times; avoid another identical retry until the blocker changes."
+        )
 
     return emit(
         {
             "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
             "budget_status": budget,
+            "host": host_profile(args.host),
             "next_actions": next_actions,
             "state": {
                 "blocked_by": blocked_by,
+                "failure_classification": failure_classification,
+                "failure_repeat_count": failure_repeat_count,
+                "failure_signature": failure_sig,
                 "next_round": next_round,
                 "remaining_gap_ledger": remaining_gap_ledger,
                 "resume_condition": resume_condition,
@@ -684,12 +1051,265 @@ def record_command(args: argparse.Namespace) -> int:
     )
 
 
+def render_report_markdown(
+    state: dict[str, Any],
+    workspace_root: Path,
+    state_path: Path,
+    host: dict[str, Any],
+    tail: int | None = None,
+) -> str:
+    contract = state.get("contract", {})
+    budget = budget_snapshot(state)
+    rounds = state.get("rounds", [])
+    if tail is not None:
+        rounds = rounds[-tail:]
+
+    def item(label: str, value: Any) -> str:
+        if value in (None, "", []):
+            value = "none"
+        if isinstance(value, list):
+            value = ", ".join(str(part) for part in value) or "none"
+        return f"- {label}: {value}"
+
+    lines = [
+        "# Superloop Run Report",
+        "",
+        "## Current State",
+        item("Workspace", workspace_root),
+        item("Host", host["host"]),
+        item("Status", state.get("status")),
+        item("Last verdict", state.get("last_verdict")),
+        item("Stop reason", state.get("stop_reason")),
+        item("Next round", state.get("next_round")),
+        item("Blocked by", state.get("blocked_by")),
+        item("Resume condition", state.get("resume_condition")),
+        "",
+        "## Budget",
+        item("Rounds used", budget["rounds_used"]),
+        item("Rounds remaining", budget["rounds_remaining"]),
+        item("Elapsed minutes", budget["elapsed_minutes"]),
+        item("Timebox remaining minutes", budget["timebox_remaining_minutes"]),
+        "",
+        "## Mission Contract",
+        item("Goal", contract.get("goal")),
+        item("Workstream", contract.get("workstream")),
+        item("Finish standard", contract.get("finish_standard")),
+        item("Success signal", contract.get("success_signal")),
+        item("Success direction", contract.get("success_direction")),
+        item("Current gate", contract.get("current_gate")),
+        item("Scope", contract.get("scope")),
+        item("Constraints", contract.get("constraints")),
+        item("Stop rule", contract.get("stop_rule")),
+        "",
+        "## Round Ledger",
+    ]
+
+    if not rounds:
+        lines.append("- No rounds recorded yet.")
+    else:
+        for round_record in rounds:
+            classification = round_record.get("failure_classification") or {}
+            lines.extend(
+                [
+                    "",
+                    f"### Round {round_record.get('round_number')}",
+                    item("Recorded at", round_record.get("recorded_at")),
+                    item("Hypothesis", round_record.get("hypothesis")),
+                    item("Change", round_record.get("change")),
+                    item("Round gate", round_record.get("round_gate")),
+                    item("Gate result", round_record.get("round_gate_result")),
+                    item("Gate status", round_record.get("gate_status")),
+                    item("Verdict", round_record.get("verdict")),
+                    item("Remaining gaps", round_record.get("remaining_gap_ledger")),
+                    item("Failure class", classification.get("code")),
+                    item("Failure signature", round_record.get("failure_signature")),
+                    item("Failure repeat count", round_record.get("failure_repeat_count")),
+                    item("Recommended action", classification.get("recommended_action")),
+                    item("Next round", round_record.get("next_round")),
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Artifacts",
+            item("State path", state_path),
+            item("Installed path", host.get("installed_path")),
+            item("Harness path", host.get("harness_path")),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def report_command(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace)
+    state_path = state_path_for(workspace_root, args.host)
+    state = load_state(state_path)
+    host = host_profile(args.host)
+    if not state:
+        payload = {
+            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "host": host,
+            "status": "warning",
+            "summary": f"No Superloop harness state exists for {workspace_root.name}.",
+        }
+        if args.format == "json":
+            return emit(payload)
+        return emit_markdown(
+            f"# Superloop Run Report\n\nNo Superloop harness state exists for `{workspace_root}`.\n\nState path: `{state_path}`"
+        )
+
+    changed = maybe_close_for_budget(state)
+    if changed:
+        save_state(state_path, state)
+
+    if args.format == "json":
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "budget_status": budget_snapshot(state),
+                "host": host,
+                "state": state,
+                "status": "success",
+                "summary": f"Rendered Superloop report for {workspace_root.name}.",
+            }
+        )
+
+    return emit_markdown(render_report_markdown(state, workspace_root, state_path, host, args.tail))
+
+
+def doctor_command(args: argparse.Namespace) -> int:
+    host = host_profile(args.host)
+    source = source_root(args.source)
+    installed = Path(host["installed_path"]).expanduser()
+    current = repo_root()
+    same_tree = source.resolve() == installed.resolve() if installed.exists() else False
+    diff = (
+        {"status": "self", "missing": [], "extra": [], "modified": [], "total_differences": 0}
+        if same_tree
+        else tree_diff_summary(source, installed)
+    )
+    install_command = (
+        f"{source / 'scripts' / 'install.sh'} --host {host['host']} --source {source}"
+    )
+    exit_code = 0
+    status = "success"
+    next_actions: list[str] = []
+
+    if diff["status"] == "missing":
+        status = "warning"
+        next_actions.append(f"Install Superloop for {host['host']}: {install_command}")
+    elif diff["status"] == "drift":
+        status = "warning"
+        next_actions.append(f"Sync the installed copy: {install_command}")
+    else:
+        next_actions.append("The selected host installation is in sync with the source tree.")
+
+    if args.check and status != "success":
+        exit_code = 1
+
+    return emit(
+        {
+            "current_source_path": str(current),
+            "diff": diff,
+            "fingerprints": {
+                "installed": tree_fingerprint(installed),
+                "source": tree_fingerprint(source),
+            },
+            "git": {"source": git_info(source) if (source / ".git").exists() else None},
+            "host": host,
+            "next_actions": next_actions,
+            "source_path": str(source),
+            "status": status,
+            "summary": f"Superloop doctor checked {host['host']} installation.",
+        },
+        exit_code=exit_code,
+    )
+
+
+def install_command(args: argparse.Namespace) -> int:
+    host = host_profile(args.host)
+    source = source_root(args.source)
+    destination = Path(host["installed_path"]).expanduser()
+    diff_before = tree_diff_summary(source, destination)
+
+    if args.check:
+        status = "success" if diff_before["status"] in {"clean", "self"} else "warning"
+        return emit(
+            {
+                "diff": diff_before,
+                "host": host,
+                "source_path": str(source),
+                "status": status,
+                "summary": f"Superloop install check for {host['host']} is {diff_before['status']}.",
+            },
+            exit_code=0 if status == "success" else 1,
+        )
+
+    sync_project_tree(source, destination)
+    write_install_manifest(source, destination, host["host"])
+    diff_after = tree_diff_summary(source, destination)
+    status = "success" if diff_after["status"] == "clean" else "warning"
+
+    return emit(
+        {
+            "diff": {"before": diff_before, "after": diff_after},
+            "host": host,
+            "source_path": str(source),
+            "status": status,
+            "summary": f"Installed Superloop for {host['host']} at {destination}.",
+        },
+        exit_code=0 if status == "success" else 1,
+    )
+
+
+def preflight_command(args: argparse.Namespace) -> int:
+    required_env = normalize_name_list(args.require_env)
+    optional_env = normalize_name_list(args.optional_env)
+    missing_required = [name for name in required_env if not os.environ.get(name)]
+    missing_optional = [name for name in optional_env if not os.environ.get(name)]
+    failure = (
+        classify_failure("missing required environment variable " + ", ".join(missing_required))
+        if missing_required
+        else None
+    )
+    status = "error" if missing_required else "success"
+    next_actions = []
+    if missing_required:
+        next_actions.append(
+            "Set required environment variables before continuing: "
+            + ", ".join(missing_required)
+        )
+    if missing_optional:
+        next_actions.append(
+            "Optional environment variables are unset: " + ", ".join(missing_optional)
+        )
+    if not next_actions:
+        next_actions.append("Preflight passed; continue with the next round.")
+
+    return emit(
+        {
+            "failure_classification": failure,
+            "host": host_profile(args.host),
+            "missing_optional_env": missing_optional,
+            "missing_required_env": missing_required,
+            "next_actions": next_actions,
+            "required_env": required_env,
+            "optional_env": optional_env,
+            "status": status,
+            "summary": "Superloop preflight checked required and optional environment variables.",
+        },
+        exit_code=1 if missing_required else 0,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Harness for the Superloop skill.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="Initialize or refresh a Superloop run.")
     init_parser.add_argument("--workspace")
+    init_parser.add_argument("--host", default="auto", type=normalize_host)
     init_parser.add_argument("--goal", required=True)
     init_parser.add_argument("--workstream", "--artifact", dest="workstream")
     init_parser.add_argument("--finish-standard", "--maturity-target", dest="finish_standard")
@@ -706,12 +1326,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume_parser = subparsers.add_parser("resume", help="Load the current Superloop run.")
     resume_parser.add_argument("--workspace")
+    resume_parser.add_argument("--host", default="auto", type=normalize_host)
     resume_parser.set_defaults(func=resume_command)
 
     record_parser = subparsers.add_parser(
         "record", help="Persist the latest Superloop round and compute the loop verdict."
     )
     record_parser.add_argument("--workspace")
+    record_parser.add_argument("--host", default="auto", type=normalize_host)
     record_parser.add_argument("--hypothesis", required=True)
     record_parser.add_argument("--change", required=True)
     record_parser.add_argument("--round-gate", required=True)
@@ -726,6 +1348,48 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--cannot-continue", action="store_true")
     record_parser.add_argument("--would-exceed-contract", action="store_true")
     record_parser.set_defaults(func=record_command)
+
+    timeline_parser = subparsers.add_parser(
+        "timeline", help="Render a human-readable Superloop run timeline."
+    )
+    timeline_parser.add_argument("--workspace")
+    timeline_parser.add_argument("--host", default="auto", type=normalize_host)
+    timeline_parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    timeline_parser.add_argument("--tail", type=positive_int)
+    timeline_parser.set_defaults(func=report_command)
+
+    report_parser = subparsers.add_parser(
+        "report", help="Render a Superloop run report. Alias-friendly companion to timeline."
+    )
+    report_parser.add_argument("--workspace")
+    report_parser.add_argument("--host", default="auto", type=normalize_host)
+    report_parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    report_parser.add_argument("--tail", type=positive_int)
+    report_parser.set_defaults(func=report_command)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Check host adapter paths, state location, and install drift."
+    )
+    doctor_parser.add_argument("--host", default="auto", type=normalize_host)
+    doctor_parser.add_argument("--source")
+    doctor_parser.add_argument("--check", action="store_true")
+    doctor_parser.set_defaults(func=doctor_command)
+
+    install_parser = subparsers.add_parser(
+        "install", help="Install or sync Superloop into a host-specific skill directory."
+    )
+    install_parser.add_argument("--host", default="auto", type=normalize_host)
+    install_parser.add_argument("--source")
+    install_parser.add_argument("--check", action="store_true")
+    install_parser.set_defaults(func=install_command)
+
+    preflight_parser = subparsers.add_parser(
+        "preflight", help="Run generic preflight checks before spending a Superloop round."
+    )
+    preflight_parser.add_argument("--host", default="auto", type=normalize_host)
+    preflight_parser.add_argument("--require-env", action="append", default=[])
+    preflight_parser.add_argument("--optional-env", action="append", default=[])
+    preflight_parser.set_defaults(func=preflight_command)
 
     return parser
 
