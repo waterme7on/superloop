@@ -1,3 +1,27 @@
+# Python caches
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+
+# Test and coverage output
+.coverage
+coverage.xml
+htmlcov/
+
+# Superloop local runtime/install artifacts
+.superloop/
+.superloop-install.json
+SUPERLOOP_RUN.md
+
+# Project-local agent homes
+.codex/
+.claude/
+
+# Local env and logs
+.env
+.env.local
+.env.*.local
+*.log
+
+# OS files
 .DS_Store

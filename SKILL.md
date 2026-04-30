@@ -291,9 +291,11 @@ It is not the same thing as mission complete.
 
 ## References
 
+- Main docs entry point: [docs/index.md](docs/index.md)
+- Harness workflow and CLI contract: [docs/reference/cli.md](docs/reference/cli.md)
+- Status cards and GitHub sync: [docs/reference/status-cards.md](docs/reference/status-cards.md)
 - For turning a vague request into a mission contract: [references/goal-contract.md](references/goal-contract.md)
 - For the execution loop and decision rules: [references/loop-protocol.md](references/loop-protocol.md)
 - For default gates by workstream: [references/artifact-gates.md](references/artifact-gates.md)
 - For calibrating finish standards: [references/maturity-ladders.md](references/maturity-ladders.md)
-- For the harness workflow and CLI contract: [references/harness.md](references/harness.md)
 - For the visual model of the skill: [references/visual-map.md](references/visual-map.md)

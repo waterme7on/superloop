@@ -15,10 +15,12 @@ This repo includes one ready-to-run implementation for local skill environments 
 
 - `SKILL.md`: the main operating contract
 - `agents/openai.yaml`: Codex/OpenAI-host metadata for the skill picker
-- `references/`: supporting docs for mission contracts, loop protocol, finish standards, workstream gates, and harness usage
-- `docs/`: host-specific install notes for Codex, Claude Code, and direct CLI usage
+- `docs/index.md`: the main docs entry point
+- `docs/`: host-specific install notes, core concepts, and CLI reference
+- `references/`: deeper operating-model notes for mission contracts, loop protocol, finish standards, and workstream gates
+- `src/superloop/`: importable harness implementation
 - `scripts/superloop_cli.sh`: shell entrypoint for the harness
-- `scripts/superloop_harness.py`: stateful harness implementation
+- `scripts/superloop_harness.py`: compatibility wrapper for older commands
 - `scripts/install.sh`: host-aware install/sync wrapper
 
 ## Architecture
@@ -31,7 +33,8 @@ The runtime split is intentional:
 
 - `SKILL.md` and `references/*` define the operating contract
 - `superloop_cli.sh` is the stable shell entrypoint
-- `superloop_harness.py` owns persisted state, round recording, budget tracking, and stop-audit decisions
+- `src/superloop/cli.py` owns persisted state, round recording, budget tracking, status cards, and stop-audit decisions
+- `scripts/superloop_harness.py` keeps the old command path working by importing the package
 - the target workspace stays separate from the harness state file
 
 ## Install
@@ -57,12 +60,13 @@ The installed copy can be checked later:
 ./scripts/superloop_cli.sh doctor --host generic
 ```
 
-Host-specific notes live in:
+Start with [docs/index.md](docs/index.md). Host-specific notes live in:
 
 - [docs/install-codex.md](docs/install-codex.md)
 - [docs/install-claude-code.md](docs/install-claude-code.md)
 - [docs/install-generic-cli.md](docs/install-generic-cli.md)
 - [docs/host-adapters.md](docs/host-adapters.md)
+- [docs/reference/cli.md](docs/reference/cli.md)
 
 ## Quick start
 
@@ -133,6 +137,18 @@ Render the visible run ledger:
 ```bash
 "$SUPERLOOP_HARNESS" timeline --workspace /path/to/repo
 "$SUPERLOOP_HARNESS" report --workspace /path/to/repo --format json
+```
+
+Render a deploy or workflow status card and optionally sync it to GitHub:
+
+```bash
+"$SUPERLOOP_HARNESS" status-card \
+  --workspace /path/to/repo \
+  --stage deploy \
+  --platform cloudflare \
+  --require-env CLOUDFLARE_API_TOKEN \
+  --github-repo owner/repo \
+  --github-pr 12
 ```
 
 Blocked rounds also carry a failure classification, stable failure signature, and
@@ -207,6 +223,7 @@ Useful checks while editing this repo:
 
 ```bash
 python3 -m py_compile scripts/superloop_harness.py
+python3 -m py_compile src/superloop/cli.py
 ./scripts/superloop_cli.sh resume --workspace "$(pwd)"
 ./scripts/superloop_cli.sh doctor --host codex --source "$(pwd)"
 ./scripts/superloop_cli.sh doctor --host claude-code --source "$(pwd)"
