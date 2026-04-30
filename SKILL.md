@@ -53,9 +53,11 @@ The harness keeps `CODEX_HOME` compatibility, but new installs should prefer
 Then:
 
 1. run `"$SUPERLOOP_HARNESS" resume`
-2. if there is no active run, initialize one with `init`
-3. after every substantial round, call `record`
-4. use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
+2. if `resume` loads an old run but the ask changed, call `init` without `--continue-existing` so the previous run is archived and the new mission starts cleanly
+3. use `init --continue-existing` only when you intentionally want to keep the same mission and budget while refreshing contract fields
+4. before risky stages such as deploy or external-service hops, call `preflight` with required/optional env keys when they matter
+5. after every substantial round, call `record`
+6. use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
 
 Minimal init example:
 
@@ -69,6 +71,16 @@ Minimal init example:
   --scope "code, docs, smoke checks" \
   --max-rounds 5 \
   --timebox-minutes 90
+```
+
+Minimal preflight example:
+
+```bash
+"$SUPERLOOP_HARNESS" preflight \
+  --workspace /path/to/repo \
+  --stage deploy \
+  --require-env VERCEL_TOKEN \
+  --optional-env SENTRY_AUTH_TOKEN
 ```
 
 Minimal round record example:
@@ -94,6 +106,7 @@ Visible run report example:
 On the first response after this skill triggers:
 
 1. load harness state with `resume`; if none exists, initialize it with `init`
+   - if `resume` loads a stale or wrong mission for the current ask, start a fresh run with `init` and do **not** silently inherit the old contract
 2. restate the mission in one sentence
 3. state the current gate
 4. list explicit assumptions if the user did not provide a full contract

@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,20 @@ LEGACY_GATE_STATUSES = {
     "stage-blocked": "gate-blocked",
 }
 ACCEPTED_GATE_STATUSES = GATE_STATUSES | set(LEGACY_GATE_STATUSES)
+FAILURE_CLASSES = {
+    "budget-exhausted",
+    "code-regression",
+    "config-missing-optional",
+    "config-missing-required",
+    "contract-boundary",
+    "environment",
+    "external-service",
+    "mission-complete",
+    "permissions",
+    "stale-contract",
+    "unknown",
+    "workflow-syntax",
+}
 FINISH_STANDARDS = {
     "prototype-ready",
     "workflow-ready",
@@ -210,6 +225,14 @@ def state_path_for(workspace_root: Path, host_arg: str | None = None) -> Path:
     return default_state_home(host) / f"{workspace_key(workspace_root)}.json"
 
 
+def state_home(host_arg: str | None = None) -> Path:
+    return default_state_home(detect_host(host_arg))
+
+
+def history_dir_for(workspace_root: Path, host_arg: str | None = None) -> Path:
+    return state_home(host_arg) / "history" / workspace_key(workspace_root)
+
+
 def normalize_constraints(value: Any) -> list[str]:
     if value is None:
         return []
@@ -256,6 +279,28 @@ def normalize_remaining_gaps(value: Any) -> list[str]:
             continue
         normalized.append(text)
     return normalized
+
+
+def normalize_env_keys(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for item in re.split(r"[\s,]+", str(value).strip()):
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+    return normalized
+
+
+def normalize_failure_class(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    return normalized if normalized in FAILURE_CLASSES else "unknown"
 
 
 def infer_finish_standard(goal: str | None, explicit: str | None) -> str:
@@ -416,6 +461,7 @@ def normalize_round_record(raw: dict[str, Any]) -> dict[str, Any]:
 
     record = dict(raw)
     record["gate_status"] = gate_status
+    record["failure_class"] = normalize_failure_class(record.get("failure_class"))
     record["mission_complete"] = bool(mission_complete)
     record["remaining_gap_ledger"] = normalize_remaining_gaps(record.get("remaining_gap_ledger"))
     record.pop("stage_status", None)
@@ -430,6 +476,7 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
     state["guidance"] = {
         "expected_gap_checks": expected_gap_checks(state["contract"]["finish_standard"])
     }
+    workspace_root = Path(state.get("workspace_root") or ".").resolve()
     state["remaining_gap_ledger"] = normalize_remaining_gaps(state.get("remaining_gap_ledger"))
     state["rounds"] = [normalize_round_record(round_record) for round_record in state.get("rounds", [])]
     state["next_round"] = state.get("next_round")
@@ -439,6 +486,8 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
     state["last_verdict"] = state.get("last_verdict", "continue")
     state["stop_reason"] = state.get("stop_reason")
     state["budget_started_at"] = state.get("budget_started_at") or state.get("created_at") or now_iso()
+    state["run_id"] = state.get("run_id") or f"legacy-{workspace_key(workspace_root)}"
+    state["parent_run_id"] = state.get("parent_run_id")
     return state
 
 
@@ -671,12 +720,12 @@ def normalize_name_list(values: list[str]) -> list[str]:
     return names
 
 
-def failure_signature(classification: dict[str, str] | None, blocked_by: str | None, round_gate: str) -> str | None:
-    if not classification:
+def failure_signature(failure_class: str | None, blocked_by: str | None, round_gate: str) -> str | None:
+    if not failure_class:
         return None
     signature_input = "|".join(
         [
-            classification.get("code", "unknown"),
+            failure_class,
             (blocked_by or "").strip().lower(),
             round_gate.strip().lower(),
         ]
@@ -684,10 +733,164 @@ def failure_signature(classification: dict[str, str] | None, blocked_by: str | N
     return hashlib.sha1(signature_input.encode("utf-8")).hexdigest()[:12]
 
 
-def repeated_failure_count(rounds: list[dict[str, Any]], signature: str | None) -> int:
+def repeated_failure_signature_count(rounds: list[dict[str, Any]], signature: str | None) -> int:
     if not signature:
         return 0
     return 1 + sum(1 for round_record in rounds if round_record.get("failure_signature") == signature)
+
+
+def new_run_id(workspace_root: Path) -> str:
+    timestamp = now_utc().strftime("%Y%m%dT%H%M%SZ")
+    seed = f"{workspace_root}:{now_iso()}:{uuid.uuid4().hex}"
+    return f"{timestamp}-{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:8]}"
+
+
+def build_state(
+    workspace_root: Path,
+    contract: dict[str, Any],
+    *,
+    timestamp: str,
+    parent_run_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "version": STATE_VERSION,
+        "run_id": new_run_id(workspace_root),
+        "parent_run_id": parent_run_id,
+        "workspace_root": str(workspace_root),
+        "workspace_key": workspace_key(workspace_root),
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "budget_started_at": timestamp,
+        "status": "active",
+        "last_verdict": "continue",
+        "stop_reason": None,
+        "contract": contract,
+        "guidance": {"expected_gap_checks": expected_gap_checks(contract["finish_standard"])},
+        "remaining_gap_ledger": [],
+        "rounds": [],
+        "next_round": None,
+        "blocked_by": None,
+        "resume_condition": None,
+    }
+
+
+def archive_state(
+    workspace_root: Path,
+    state: dict[str, Any],
+    *,
+    reason: str,
+    host_arg: str | None = None,
+) -> Path:
+    run_id = state.get("run_id") or f"legacy-{workspace_key(workspace_root)}"
+    archive_dir = history_dir_for(workspace_root, host_arg)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    archive_base = slugify(run_id)
+    archive_path = archive_dir / f"{archive_base}.json"
+    suffix = 1
+    while archive_path.exists():
+        archive_path = archive_dir / f"{archive_base}-{suffix}.json"
+        suffix += 1
+
+    archived_state = dict(state)
+    archived_state["archived_at"] = now_iso()
+    archived_state["archive_reason"] = reason
+    save_state(archive_path, archived_state)
+    return archive_path
+
+
+def minutes_since(value: str | None) -> int:
+    return max(0, int((now_utc() - parse_iso(value)).total_seconds() // 60))
+
+
+def freshness_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    last_round = state.get("rounds", [])[-1] if state.get("rounds") else None
+    last_round_at = last_round.get("recorded_at") if last_round else None
+    return {
+        "contract_age_minutes": minutes_since(state.get("created_at")),
+        "created_at": state.get("created_at"),
+        "idle_minutes": minutes_since(state.get("updated_at")),
+        "last_round_at": last_round_at,
+        "rounds_recorded": len(state.get("rounds", [])),
+        "run_id": state.get("run_id"),
+        "updated_at": state.get("updated_at"),
+    }
+
+
+def build_status_card(
+    *,
+    stage: str,
+    classification: str,
+    recommended_action: str,
+    blocker: str | None = None,
+    can_continue: bool | None = None,
+    repeated_failure_count: int | None = None,
+) -> dict[str, Any]:
+    card = {
+        "classification": classification,
+        "recommended_action": recommended_action,
+        "stage": stage,
+    }
+    if blocker:
+        card["blocking_item"] = blocker
+    if can_continue is not None:
+        card["can_continue"] = can_continue
+    if repeated_failure_count and repeated_failure_count > 1:
+        card["repeated_failure_count"] = repeated_failure_count
+    return card
+
+
+def infer_failure_class(
+    explicit: str | None,
+    *,
+    blocked_by: str | None = None,
+    round_gate_result: str | None = None,
+    gate_status: str | None = None,
+    stop_reason: str | None = None,
+) -> str | None:
+    normalized = normalize_failure_class(explicit)
+    if normalized:
+        return normalized
+    if stop_reason == "mission-complete":
+        return "mission-complete"
+    if stop_reason == "budget-exhausted":
+        return "budget-exhausted"
+
+    text = (blocked_by or "").lower()
+    if any(token in text for token in ["secret", "credential", "token", "env", "environment variable", "config"]):
+        if any(token in text for token in ["missing", "unset", "not set", "required", "absent"]):
+            return "config-missing-required"
+        return "environment"
+    if any(token in text for token in ["permission", "forbidden", "denied", "auth"]):
+        return "permissions"
+    if any(token in text for token in ["workflow", "yaml", "syntax"]):
+        return "workflow-syntax"
+    if any(token in text for token in ["external", "network", "vercel", "cloudflare", "deploy"]):
+        return "external-service"
+    if gate_status == "gate-blocked":
+        return "contract-boundary"
+    if round_gate_result == "fail":
+        return "code-regression"
+    return None
+
+
+def repeated_failure_count(state: dict[str, Any], failure_class: str | None) -> int:
+    if not failure_class:
+        return 0
+
+    count = 0
+    for round_record in reversed(state.get("rounds", [])):
+        if normalize_failure_class(round_record.get("failure_class")) != failure_class:
+            break
+        count += 1
+    return count
+
+
+def new_mission_hint() -> str:
+    return (
+        "If the ask changed in this workspace, run `init` without `--continue-existing` to archive "
+        "the loaded run and start a fresh mission."
+    )
 
 
 def budget_snapshot(state: dict[str, Any], additional_rounds: int = 0) -> dict[str, Any]:
@@ -763,7 +966,10 @@ def init_command(args: argparse.Namespace) -> int:
         "timebox_minutes": args.timebox_minutes,
     }
 
-    if state and not args.reset:
+    archived_previous_run = None
+    init_mode = "fresh-workspace"
+
+    if state and args.continue_existing and not args.reset:
         state["contract"] = merge_contract(state.get("contract", {}), incoming_contract)
         state["guidance"]["expected_gap_checks"] = expected_gap_checks(
             state["contract"]["finish_standard"]
@@ -773,45 +979,62 @@ def init_command(args: argparse.Namespace) -> int:
         if state.get("status") == "completed":
             state["status"] = "active"
             state["last_verdict"] = "continue"
+        init_mode = "continue-existing"
     else:
         contract = normalize_contract(incoming_contract)
-        state = {
-            "version": STATE_VERSION,
-            "workspace_root": str(workspace_root),
-            "workspace_key": workspace_key(workspace_root),
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "budget_started_at": timestamp,
-            "status": "active",
-            "last_verdict": "continue",
-            "stop_reason": None,
-            "contract": contract,
-            "guidance": {"expected_gap_checks": expected_gap_checks(contract["finish_standard"])},
-            "remaining_gap_ledger": [],
-            "rounds": [],
-            "next_round": None,
-            "blocked_by": None,
-            "resume_condition": None,
-        }
+        parent_run_id = None
+        if state:
+            archive_reason = "reset" if args.reset else "new-mission"
+            archive_path = archive_state(workspace_root, state, reason=archive_reason, host_arg=args.host)
+            parent_run_id = state.get("run_id")
+            archived_previous_run = {
+                "archive_path": str(archive_path),
+                "reason": archive_reason,
+                "run_id": parent_run_id,
+            }
+            init_mode = "new-mission"
+        state = build_state(
+            workspace_root,
+            contract,
+            timestamp=timestamp,
+            parent_run_id=parent_run_id,
+        )
 
     save_state(state_path, state)
+    next_actions = [
+        "Run the next implementation round inside the stored contract.",
+        "After the round, call `record` before deciding whether to continue or stop.",
+    ]
+    if init_mode == "continue-existing":
+        next_actions.insert(
+            0,
+            "The current run stayed active because `--continue-existing` was explicit.",
+        )
+    elif archived_previous_run:
+        next_actions.insert(
+            0,
+            f"Archived the previous run to {archived_previous_run['archive_path']} before starting the new mission.",
+        )
     return emit(
         {
-            "artifacts": {
-                "state_path": str(state_path),
-                "workspace_root": str(workspace_root),
-            },
+            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "archived_previous_run": archived_previous_run,
             "budget_status": budget_snapshot(state),
             "host": host_profile(args.host),
-            "next_actions": [
-                "Run the next implementation round inside the stored contract.",
-                "After the round, call `record` before deciding whether to continue or stop.",
-            ],
+            "next_actions": next_actions,
             "state": {
                 "contract": state["contract"],
                 "expected_gap_checks": state["guidance"]["expected_gap_checks"],
+                "parent_run_id": state.get("parent_run_id"),
+                "run_id": state["run_id"],
                 "status": state["status"],
             },
+            "status_card": build_status_card(
+                stage="init",
+                classification=init_mode,
+                recommended_action="Run the next implementation round inside the stored contract.",
+                can_continue=True,
+            ),
             "status": "success",
             "summary": f"Initialized Superloop harness for {workspace_root.name}.",
         }
@@ -840,7 +1063,11 @@ def resume_command(args: argparse.Namespace) -> int:
 
     last_round = state["rounds"][-1] if state.get("rounds") else None
     budget = budget_snapshot(state)
-    next_actions = []
+    next_actions = [new_mission_hint()]
+    if state.get("status") == "active":
+        next_actions.append(
+            "Use `init --continue-existing` only when you intentionally want to keep the current mission and budget."
+        )
     if state.get("status") == "completed":
         if state.get("stop_reason") == "budget-exhausted":
             next_actions.append("The recorded budget is exhausted; reset or widen the contract before continuing.")
@@ -853,7 +1080,22 @@ def resume_command(args: argparse.Namespace) -> int:
     else:
         next_actions.append("Choose the next round before continuing.")
 
-    summary = f"Loaded Superloop harness state for {workspace_root.name}."
+    freshness = freshness_snapshot(state)
+    status_classification = state.get("stop_reason") or "active-run"
+    repeated_failures = 0
+    if last_round:
+        last_failure_class = normalize_failure_class(last_round.get("failure_class"))
+        if last_failure_class:
+            status_classification = last_failure_class
+            repeated_failures = repeated_failure_count(state, last_failure_class)
+    if freshness["idle_minutes"] >= 30 and status_classification == "active-run":
+        status_classification = "stale-contract"
+
+    recommended_action = next_actions[-1]
+    summary = (
+        f"Loaded Superloop harness state for {workspace_root.name} "
+        f"(run {state['run_id']}, idle {freshness['idle_minutes']}m)."
+    )
     if changed:
         summary = f"Loaded Superloop harness state for {workspace_root.name}; budget is exhausted."
 
@@ -862,6 +1104,7 @@ def resume_command(args: argparse.Namespace) -> int:
             "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
             "budget_status": budget,
             "host": host_profile(args.host),
+            "freshness": freshness,
             "next_actions": next_actions,
             "state": {
                 "blocked_by": state.get("blocked_by"),
@@ -870,13 +1113,94 @@ def resume_command(args: argparse.Namespace) -> int:
                 "last_round": last_round,
                 "last_verdict": state.get("last_verdict"),
                 "next_round": state.get("next_round"),
+                "parent_run_id": state.get("parent_run_id"),
                 "remaining_gap_ledger": state.get("remaining_gap_ledger", []),
                 "resume_condition": state.get("resume_condition"),
+                "run_id": state.get("run_id"),
                 "status": state.get("status"),
                 "stop_reason": state.get("stop_reason"),
             },
+            "status_card": build_status_card(
+                stage="resume",
+                classification=status_classification,
+                recommended_action=recommended_action,
+                blocker=state.get("blocked_by"),
+                can_continue=state.get("status") == "active",
+                repeated_failure_count=repeated_failures,
+            ),
             "status": "success",
             "summary": summary,
+        }
+    )
+
+
+def preflight_command(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace)
+    required_env = normalize_env_keys(args.require_env)
+    optional_env = normalize_env_keys(args.optional_env)
+    missing_required_env = [name for name in required_env if not os.environ.get(name)]
+    missing_optional_env = [name for name in optional_env if not os.environ.get(name)]
+
+    status = "success"
+    classification = "ready"
+    next_actions: list[str] = []
+    blocker = None
+
+    workspace_issue = None
+    if not workspace_root.exists():
+        workspace_issue = f"Workspace does not exist: {workspace_root}"
+    elif not workspace_root.is_dir():
+        workspace_issue = f"Workspace is not a directory: {workspace_root}"
+
+    state_home_error = None
+    try:
+        state_home(args.host).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        state_home_error = f"Cannot prepare state home `{state_home(args.host)}`: {exc}"
+
+    if workspace_issue or state_home_error:
+        status = "error"
+        classification = "environment"
+        blocker = workspace_issue or state_home_error
+        next_actions.append("Fix the workspace or state-home path before continuing the loop.")
+    elif missing_required_env:
+        status = "error"
+        classification = "config-missing-required"
+        blocker = f"Missing required environment variables: {', '.join(missing_required_env)}"
+        next_actions.append(f"Set required environment variables: {', '.join(missing_required_env)}")
+        next_actions.append("Rerun `preflight` before resuming the next stage.")
+    elif missing_optional_env:
+        status = "warning"
+        classification = "config-missing-optional"
+        next_actions.append(f"Optional environment variables are missing: {', '.join(missing_optional_env)}")
+        next_actions.append("Continue only if the current stage truly treats them as optional.")
+    else:
+        next_actions.append("Preflight is clean. Continue to the planned stage.")
+
+    return emit(
+        {
+            "artifacts": {
+                "state_home": str(state_home(args.host)),
+                "workspace_root": str(workspace_root),
+            },
+            "host": host_profile(args.host),
+            "next_actions": next_actions,
+            "preflight": {
+                "missing_optional_env": missing_optional_env,
+                "missing_required_env": missing_required_env,
+                "optional_env": optional_env,
+                "required_env": required_env,
+                "stage": args.stage,
+            },
+            "status": status,
+            "status_card": build_status_card(
+                stage=args.stage,
+                classification=classification,
+                recommended_action=next_actions[-1],
+                blocker=blocker,
+                can_continue=status != "error",
+            ),
+            "summary": f"Preflight completed for {workspace_root.name}.",
         }
     )
 
@@ -908,22 +1232,11 @@ def record_command(args: argparse.Namespace) -> int:
         remaining_gap_ledger = normalize_remaining_gaps(state.get("remaining_gap_ledger", []))
     blocked_by = args.blocked_by
     resume_condition = args.resume_condition
-    failure_classification = None
 
     if gate_status == "gate-blocked" and not blocked_by:
         blocked_by = "Gate blocked by an unresolved dependency or contract boundary."
     if blocked_by and not resume_condition:
         resume_condition = "Remove the blocker or narrow the contract, then resume the recorded next round."
-    if blocked_by or args.round_gate_result == "fail":
-        failure_classification = classify_failure(
-            " ".join(
-                item
-                for item in [blocked_by, args.round_gate, args.round_gate_result, args.change]
-                if item
-            )
-        )
-    failure_sig = failure_signature(failure_classification, blocked_by, args.round_gate)
-    failure_repeat_count = repeated_failure_count(state.get("rounds", []), failure_sig)
 
     can_continue = not args.cannot_continue and not args.would_exceed_contract and not blocked_by
     mission_complete = args.mission_complete
@@ -976,6 +1289,16 @@ def record_command(args: argparse.Namespace) -> int:
         stop_reason = None
         next_round = args.next_round
 
+    failure_class = infer_failure_class(
+        args.failure_class,
+        blocked_by=blocked_by,
+        round_gate_result=args.round_gate_result,
+        gate_status=gate_status,
+        stop_reason=stop_reason,
+    )
+    repeated_failures = repeated_failure_count(state, failure_class) + (1 if failure_class else 0)
+    failure_sig = failure_signature(failure_class, blocked_by, args.round_gate)
+    failure_signature_repeats = repeated_failure_signature_count(state.get("rounds", []), failure_sig)
     round_number = len(state.get("rounds", [])) + 1
     round_record = {
         "round_number": round_number,
@@ -990,8 +1313,8 @@ def record_command(args: argparse.Namespace) -> int:
         "mission_complete": mission_complete,
         "stop_rule_satisfied": args.stop_rule_satisfied,
         "blocked_by": blocked_by,
-        "failure_classification": failure_classification,
-        "failure_repeat_count": failure_repeat_count,
+        "failure_class": failure_class,
+        "failure_repeat_count": failure_signature_repeats,
         "failure_signature": failure_sig,
         "resume_condition": resume_condition,
         "would_exceed_contract": args.would_exceed_contract,
@@ -1013,6 +1336,10 @@ def record_command(args: argparse.Namespace) -> int:
 
     budget = budget_snapshot(state)
     next_actions = []
+    if repeated_failures >= 2 and failure_class not in {"mission-complete", "budget-exhausted"}:
+        next_actions.append(
+            f"Failure class `{failure_class}` has repeated for {repeated_failures} consecutive rounds; change strategy or escalate instead of retrying blindly."
+        )
     if verdict == "continue":
         next_actions.append(f"Continue with the recorded next round: {next_round}")
     elif verdict == "pause":
@@ -1022,9 +1349,9 @@ def record_command(args: argparse.Namespace) -> int:
         next_actions.append(f"Budget is exhausted; if you reopen the contract, resume with: {next_round}")
     else:
         next_actions.append("The harness allows a normal stop for this run.")
-    if failure_repeat_count > 1:
+    if failure_signature_repeats > 1:
         next_actions.append(
-            f"This failure signature has appeared {failure_repeat_count} times; avoid another identical retry until the blocker changes."
+            f"This failure signature has appeared {failure_signature_repeats} times; avoid another identical retry until the blocker changes."
         )
 
     return emit(
@@ -1035,8 +1362,8 @@ def record_command(args: argparse.Namespace) -> int:
             "next_actions": next_actions,
             "state": {
                 "blocked_by": blocked_by,
-                "failure_classification": failure_classification,
-                "failure_repeat_count": failure_repeat_count,
+                "failure_class": failure_class,
+                "failure_repeat_count": failure_signature_repeats,
                 "failure_signature": failure_sig,
                 "next_round": next_round,
                 "remaining_gap_ledger": remaining_gap_ledger,
@@ -1044,6 +1371,14 @@ def record_command(args: argparse.Namespace) -> int:
                 "status": status,
                 "stop_reason": stop_reason,
             },
+            "status_card": build_status_card(
+                stage="record",
+                classification=failure_class or verdict,
+                recommended_action=next_actions[-1],
+                blocker=blocked_by,
+                can_continue=verdict == "continue",
+                repeated_failure_count=repeated_failures,
+            ),
             "status": "success",
             "summary": f"Recorded round {round_number}; harness verdict is `{verdict}`.",
             "verdict": verdict,
@@ -1108,7 +1443,7 @@ def render_report_markdown(
         lines.append("- No rounds recorded yet.")
     else:
         for round_record in rounds:
-            classification = round_record.get("failure_classification") or {}
+            failure_class = round_record.get("failure_class")
             lines.extend(
                 [
                     "",
@@ -1121,10 +1456,9 @@ def render_report_markdown(
                     item("Gate status", round_record.get("gate_status")),
                     item("Verdict", round_record.get("verdict")),
                     item("Remaining gaps", round_record.get("remaining_gap_ledger")),
-                    item("Failure class", classification.get("code")),
+                    item("Failure class", failure_class),
                     item("Failure signature", round_record.get("failure_signature")),
                     item("Failure repeat count", round_record.get("failure_repeat_count")),
-                    item("Recommended action", classification.get("recommended_action")),
                     item("Next round", round_record.get("next_round")),
                 ]
             )
@@ -1263,46 +1597,6 @@ def install_command(args: argparse.Namespace) -> int:
     )
 
 
-def preflight_command(args: argparse.Namespace) -> int:
-    required_env = normalize_name_list(args.require_env)
-    optional_env = normalize_name_list(args.optional_env)
-    missing_required = [name for name in required_env if not os.environ.get(name)]
-    missing_optional = [name for name in optional_env if not os.environ.get(name)]
-    failure = (
-        classify_failure("missing required environment variable " + ", ".join(missing_required))
-        if missing_required
-        else None
-    )
-    status = "error" if missing_required else "success"
-    next_actions = []
-    if missing_required:
-        next_actions.append(
-            "Set required environment variables before continuing: "
-            + ", ".join(missing_required)
-        )
-    if missing_optional:
-        next_actions.append(
-            "Optional environment variables are unset: " + ", ".join(missing_optional)
-        )
-    if not next_actions:
-        next_actions.append("Preflight passed; continue with the next round.")
-
-    return emit(
-        {
-            "failure_classification": failure,
-            "host": host_profile(args.host),
-            "missing_optional_env": missing_optional,
-            "missing_required_env": missing_required,
-            "next_actions": next_actions,
-            "required_env": required_env,
-            "optional_env": optional_env,
-            "status": status,
-            "summary": "Superloop preflight checked required and optional environment variables.",
-        },
-        exit_code=1 if missing_required else 0,
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Harness for the Superloop skill.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1321,8 +1615,20 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--stop-rule")
     init_parser.add_argument("--max-rounds", type=positive_int)
     init_parser.add_argument("--timebox-minutes", type=positive_int)
+    init_parser.add_argument("--continue-existing", action="store_true")
     init_parser.add_argument("--reset", action="store_true")
     init_parser.set_defaults(func=init_command)
+
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="Check workspace and environment prerequisites before a risky stage.",
+    )
+    preflight_parser.add_argument("--workspace")
+    preflight_parser.add_argument("--host", default="auto", type=normalize_host)
+    preflight_parser.add_argument("--stage", default="preflight")
+    preflight_parser.add_argument("--require-env", action="append", default=[])
+    preflight_parser.add_argument("--optional-env", action="append", default=[])
+    preflight_parser.set_defaults(func=preflight_command)
 
     resume_parser = subparsers.add_parser("resume", help="Load the current Superloop run.")
     resume_parser.add_argument("--workspace")
@@ -1344,6 +1650,7 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--mission-complete", "--top-level-goal-met", dest="mission_complete", action="store_true")
     record_parser.add_argument("--stop-rule-satisfied", action="store_true")
     record_parser.add_argument("--blocked-by")
+    record_parser.add_argument("--failure-class", choices=sorted(FAILURE_CLASSES))
     record_parser.add_argument("--resume-condition")
     record_parser.add_argument("--cannot-continue", action="store_true")
     record_parser.add_argument("--would-exceed-contract", action="store_true")
@@ -1382,14 +1689,6 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--source")
     install_parser.add_argument("--check", action="store_true")
     install_parser.set_defaults(func=install_command)
-
-    preflight_parser = subparsers.add_parser(
-        "preflight", help="Run generic preflight checks before spending a Superloop round."
-    )
-    preflight_parser.add_argument("--host", default="auto", type=normalize_host)
-    preflight_parser.add_argument("--require-env", action="append", default=[])
-    preflight_parser.add_argument("--optional-env", action="append", default=[])
-    preflight_parser.set_defaults(func=preflight_command)
 
     return parser
 

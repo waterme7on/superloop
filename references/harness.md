@@ -24,7 +24,12 @@ Run this first in the current workspace:
 "$SUPERLOOP_HARNESS" resume
 ```
 
-If an active run exists, use its stored contract, next round, blocker, budget, and stop rule instead of re-inferring them from scratch.
+If an active run exists, use its stored contract, next round, blocker, budget, and stop rule
+instead of re-inferring them from scratch.
+
+If `resume` loads a run but the user ask has clearly changed, do not silently inherit the old
+contract. Start a fresh mission with `init` and reserve `init --continue-existing` for cases
+where the mission is intentionally the same.
 
 ### Init
 
@@ -44,6 +49,12 @@ Run `init` only when `resume` reports no active run:
   --timebox-minutes 90
 ```
 
+Safe same-workspace reset:
+
+- plain `init` now starts a fresh mission and archives the previously active run for auditability
+- `--continue-existing` is required before `init` will merge into the currently loaded run
+- `--reset` still starts a fresh mission, but now archives the previous run before replacing it
+
 Legacy compatibility:
 
 - `--artifact` still maps to `--workstream`
@@ -52,6 +63,23 @@ Legacy compatibility:
 - `--stage-gate` still maps to `--current-gate`
 
 If `stop-rule` is omitted, the harness writes a budget-aware default that is stronger than "do one round and stop."
+
+### Preflight
+
+For stages that depend on environment configuration, run a lightweight preflight first:
+
+```bash
+"$SUPERLOOP_HARNESS" preflight \
+  --stage deploy \
+  --require-env VERCEL_TOKEN \
+  --optional-env SENTRY_AUTH_TOKEN
+```
+
+The harness will:
+
+- fail fast on missing required env vars
+- warn on missing optional env vars
+- return a small status card with classification, blocker, and recommended next action
 
 ### Record
 
@@ -115,21 +143,6 @@ Check which host adapter is active and whether an installed copy has drifted:
 
 Use `--check` when the command should return non-zero on missing or drifted installs.
 
-### Preflight
-
-Check required and optional environment variables before spending a deploy or
-external-service round:
-
-```bash
-"$SUPERLOOP_HARNESS" preflight \
-  --require-env CLOUDFLARE_API_TOKEN \
-  --require-env CLOUDFLARE_ACCOUNT_ID \
-  --optional-env SENTRY_DSN
-```
-
-Missing required variables return a non-zero exit code and include a
-`config-missing` failure classification plus a concrete next action.
-
 When `record` captures a blocked or failed round, the harness also stores a
 stable `failure_signature` and `failure_repeat_count`. If the same failure
 appears again, the returned next actions warn against another identical retry.
@@ -143,6 +156,7 @@ State is stored outside the target workspace by default:
 - Codex adapter: `$CODEX_HOME/state/superloop/<workspace-key>.json`
 - Claude Code adapter: `$CLAUDE_HOME/state/superloop/<workspace-key>.json`
 - generic CLI: `~/.superloop/state/<workspace-key>.json`
+- archived prior runs: `<state-home>/history/<workspace-key>/`
 
 This keeps resume data across turns without dirtying the target repo or deliverable folder.
 
