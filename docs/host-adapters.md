@@ -22,6 +22,10 @@ Use `auto` when the harness should infer the host from the installed script path
 - State path: `$CODEX_HOME/state/superloop`
 - Metadata: `agents/openai.yaml` and `SKILL.md`
 
+`agents/openai.yaml` is intentionally kept as root-level Codex metadata because
+Codex skill discovery expects that shape. It is host metadata, not core loop
+logic.
+
 ## Claude Code
 
 - Home: `$CLAUDE_HOME`, defaulting to `~/.claude`
@@ -41,3 +45,6 @@ Use `auto` when the harness should infer the host from the installed script path
 Existing Codex commands continue to work. New documentation should prefer
 `SUPERLOOP_HOME`, `SUPERLOOP_STATE_HOME`, or the selected host adapter instead of
 presenting `CODEX_HOME` as the universal default.
+
+The implementation is shared through `src/superloop/`; host adapters select
+paths and metadata only.

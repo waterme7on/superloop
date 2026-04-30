@@ -201,6 +201,92 @@ class SuperloopHarnessTests(unittest.TestCase):
         self.assertEqual(success_payload["status"], "success")
         self.assertEqual(success_payload["status_card"]["classification"], "ready")
 
+    def test_status_card_renders_migration_and_github_dry_run(self) -> None:
+        payload = self.run_harness(
+            "status-card",
+            "--workspace",
+            str(self.workspace),
+            "--stage",
+            "deploy",
+            "--require-env",
+            "SUPERLOOP_TEST_REQUIRED_TOKEN",
+            "--platform",
+            "cloudflare",
+            "--migration-from",
+            "vercel",
+            "--migration-to",
+            "cloudflare",
+            "--disabled-platform",
+            "vercel",
+            "--locale",
+            "zh",
+            "--github-repo",
+            "waterme7on/superloop",
+            "--github-issue",
+            "4",
+            "--dry-run",
+        )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(
+            payload["status_card"]["classification"],
+            "config-missing-required",
+        )
+        self.assertEqual(payload["status_card"]["locale"], "zh")
+        self.assertEqual(payload["status_card"]["platform"]["current"], "cloudflare")
+        self.assertEqual(payload["status_card"]["platform"]["migration_from"], "vercel")
+        self.assertEqual(payload["github_sync"][0]["status"], "dry-run")
+        self.assertIn("迁移模式", payload["status_card_markdown"])
+
+    def test_status_card_uses_github_env_defaults(self) -> None:
+        payload = self.run_harness(
+            "status-card",
+            "--workspace",
+            str(self.workspace),
+            "--stage",
+            "deploy",
+            "--classification",
+            "external-service",
+            "--dry-run",
+            env={
+                "GITHUB_REPOSITORY": "waterme7on/superloop",
+                "SUPERLOOP_GITHUB_ISSUE": "4",
+            },
+        )
+
+        self.assertEqual(payload["github_sync"][0]["number"], 4)
+        self.assertEqual(payload["github_sync"][0]["target"], "issue")
+
+    def test_status_card_classifies_failure_text_with_stable_codes(self) -> None:
+        payload = self.run_harness(
+            "status-card",
+            "--workspace",
+            str(self.workspace),
+            "--stage",
+            "build",
+            "--failure-text",
+            "GitHub Actions workflow YAML syntax is invalid",
+        )
+
+        self.assertEqual(payload["status_card"]["classification"], "workflow-syntax")
+
+    def test_cli_module_is_importable(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(REPO_ROOT / "src")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import superloop.cli as cli; print(cli.repo_root())",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(Path(result.stdout.strip()), REPO_ROOT)
+
 
 if __name__ == "__main__":
     unittest.main()

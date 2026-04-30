@@ -9,11 +9,16 @@ Core responsibilities:
 - record rounds and compute `continue`, `pause`, or `stop`
 - track round and time budgets
 - render timeline and report output
+- render PR/Issue-ready status cards
 - classify blocked rounds enough to route the next action
 - preflight required and optional environment variables before external-service rounds
 
 Host adapters are intentionally thin. They choose install paths, metadata files, and
 invocation docs. They should not fork the loop semantics.
+
+The current implementation lives in `src/superloop/cli.py`. The historical
+`scripts/superloop_harness.py` path remains a wrapper so existing installed
+commands keep working.
 
 State path precedence:
 

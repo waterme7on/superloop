@@ -35,5 +35,6 @@ Claude Code state is host-specific:
 $CLAUDE_HOME/state/superloop/<workspace-key>.json
 ```
 
-The same `SKILL.md`, `references/`, and `scripts/` are used. The Claude adapter
-does not depend on Codex-specific `agents/openai.yaml` metadata.
+The same `SKILL.md`, `docs/`, `references/`, `src/`, and `scripts/` are used.
+The Claude adapter does not depend on Codex-specific `agents/openai.yaml`
+metadata.
