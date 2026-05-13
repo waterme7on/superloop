@@ -62,6 +62,20 @@ LEGACY_FINISH_STANDARD_MAP = {
     "product-shape-ready": "workflow-ready",
     "beta-ready": "workflow-ready",
 }
+COMPLETION_AUDIT_CHECKLIST = [
+    "Derive concrete requirements from the mission, current gate, and remaining gap ledger.",
+    "Inspect authoritative current state before relying on earlier chat or intent.",
+    "Verify every explicit requirement with files, command output, tests, runtime behavior, or external state.",
+    "Treat missing or indirect evidence as incomplete rather than complete.",
+    "Mark the mission complete only when the evidence proves no required work remains.",
+]
+CONTEXT_DIRECTIVES = [
+    "Continue the stored Superloop mission; do not shrink the objective to fit this turn.",
+    "Use the current workspace and external systems as authoritative evidence.",
+    "Keep the current round focused on the next recorded gate or active in-flight round.",
+    "Record the round before deciding whether to continue, pause, or stop.",
+    "Do not claim mission completion without explicit completion evidence.",
+]
 
 
 def now_utc() -> datetime:
@@ -287,6 +301,19 @@ def normalize_remaining_gaps(value: Any) -> list[str]:
     return normalized
 
 
+def normalize_completion_evidence(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    raw_items = value if isinstance(value, list) else [value]
+    evidence: list[str] = []
+    for item in raw_items:
+        text = str(item).strip()
+        if text:
+            evidence.append(text)
+    return evidence
+
+
 def normalize_env_keys(values: list[str] | None) -> list[str]:
     if not values:
         return []
@@ -486,6 +513,7 @@ def normalize_round_record(raw: dict[str, Any]) -> dict[str, Any]:
     record["failure_class"] = normalize_failure_class(record.get("failure_class"))
     record["mission_complete"] = bool(mission_complete)
     record["remaining_gap_ledger"] = normalize_remaining_gaps(record.get("remaining_gap_ledger"))
+    record["completion_evidence"] = normalize_completion_evidence(record.get("completion_evidence"))
     record.pop("stage_status", None)
     record.pop("top_level_goal_met", None)
     return record
@@ -501,6 +529,7 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
     workspace_root = Path(state.get("workspace_root") or ".").resolve()
     state["remaining_gap_ledger"] = normalize_remaining_gaps(state.get("remaining_gap_ledger"))
     state["rounds"] = [normalize_round_record(round_record) for round_record in state.get("rounds", [])]
+    state["active_round"] = state.get("active_round")
     state["next_round"] = state.get("next_round")
     state["blocked_by"] = state.get("blocked_by")
     state["resume_condition"] = state.get("resume_condition")
@@ -789,6 +818,7 @@ def build_state(
         "contract": contract,
         "guidance": {"expected_gap_checks": expected_gap_checks(contract["finish_standard"])},
         "remaining_gap_ledger": [],
+        "active_round": None,
         "rounds": [],
         "next_round": None,
         "blocked_by": None,
@@ -1260,6 +1290,126 @@ def maybe_close_for_budget(state: dict[str, Any]) -> bool:
     return True
 
 
+def build_runtime_context(
+    state: dict[str, Any],
+    workspace_root: Path,
+    state_path: Path,
+    host: dict[str, Any],
+) -> dict[str, Any]:
+    contract = state.get("contract", {})
+    budget = budget_snapshot(state)
+    return {
+        "active_round": state.get("active_round"),
+        "artifacts": {
+            "harness_path": host.get("harness_path"),
+            "state_path": str(state_path),
+            "workspace_root": str(workspace_root),
+        },
+        "budget_status": budget,
+        "completion_audit_checklist": COMPLETION_AUDIT_CHECKLIST,
+        "contract": contract,
+        "directives": CONTEXT_DIRECTIVES,
+        "expected_gap_checks": state.get("guidance", {}).get("expected_gap_checks", []),
+        "last_round": state.get("rounds", [])[-1] if state.get("rounds") else None,
+        "last_verdict": state.get("last_verdict"),
+        "next_round": state.get("next_round"),
+        "remaining_gap_ledger": state.get("remaining_gap_ledger", []),
+        "resume_condition": state.get("resume_condition"),
+        "run_id": state.get("run_id"),
+        "status": state.get("status"),
+        "stop_reason": state.get("stop_reason"),
+    }
+
+
+def render_runtime_context_markdown(context: dict[str, Any]) -> str:
+    contract = context.get("contract", {})
+    budget = context.get("budget_status", {})
+    active_round = context.get("active_round")
+
+    def value(item: Any) -> str:
+        if item in (None, "", []):
+            return "none"
+        if isinstance(item, list):
+            return ", ".join(str(part) for part in item) or "none"
+        return str(item)
+
+    lines = [
+        "# Superloop Runtime Context",
+        "",
+        "Use this as the next-round steering prompt. It is generated from persisted harness state, not chat memory.",
+        "",
+        "## Mission",
+        f"- Goal: {value(contract.get('goal'))}",
+        f"- Workstream: {value(contract.get('workstream'))}",
+        f"- Finish standard: {value(contract.get('finish_standard'))}",
+        f"- Success signal: {value(contract.get('success_signal'))}",
+        f"- Current gate: {value(contract.get('current_gate'))}",
+        f"- Stop rule: {value(contract.get('stop_rule'))}",
+        "",
+        "## Budget",
+        f"- Rounds used: {value(budget.get('rounds_used'))}",
+        f"- Rounds remaining: {value(budget.get('rounds_remaining'))}",
+        f"- Elapsed minutes: {value(budget.get('elapsed_minutes'))}",
+        f"- Timebox remaining minutes: {value(budget.get('timebox_remaining_minutes'))}",
+        "",
+        "## Next Execution Focus",
+        f"- Status: {value(context.get('status'))}",
+        f"- Last verdict: {value(context.get('last_verdict'))}",
+        f"- Next round: {value(context.get('next_round'))}",
+        f"- Resume condition: {value(context.get('resume_condition'))}",
+    ]
+    if active_round:
+        lines.extend(
+            [
+                "",
+                "## Active Round",
+                f"- Round number: {value(active_round.get('round_number'))}",
+                f"- Started at: {value(active_round.get('started_at'))}",
+                f"- Hypothesis: {value(active_round.get('hypothesis'))}",
+                f"- Change: {value(active_round.get('change'))}",
+                f"- Round gate: {value(active_round.get('round_gate'))}",
+                "",
+                "Resolve this active round with `record` before starting another round.",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Remaining Gaps",
+        ]
+    )
+    gaps = context.get("remaining_gap_ledger") or []
+    if gaps:
+        lines.extend(f"- {gap}" for gap in gaps)
+    else:
+        lines.append("- none")
+
+    lines.extend(
+        [
+            "",
+            "## Completion Audit",
+        ]
+    )
+    lines.extend(f"- {item}" for item in context.get("completion_audit_checklist", []))
+    lines.extend(
+        [
+            "",
+            "## Directives",
+        ]
+    )
+    lines.extend(f"- {item}" for item in context.get("directives", []))
+    lines.extend(
+        [
+            "",
+            "## Artifacts",
+            f"- State path: {value(context.get('artifacts', {}).get('state_path'))}",
+            f"- Harness path: {value(context.get('artifacts', {}).get('harness_path'))}",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def init_command(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace)
     state_path = state_path_for(workspace_root, args.host)
@@ -1389,6 +1539,8 @@ def resume_command(args: argparse.Namespace) -> int:
             next_actions.append("The recorded run is already complete. Start a new run only if the mission or contract changed.")
     elif state.get("status") == "paused":
         next_actions.append("Resolve the blocker or narrow the contract before resuming.")
+    elif state.get("active_round"):
+        next_actions.append("Resolve the active round with `record` before starting another round.")
     elif state.get("next_round"):
         next_actions.append(f"Resume with the recorded next round: {state['next_round']}")
     else:
@@ -1421,6 +1573,7 @@ def resume_command(args: argparse.Namespace) -> int:
             "freshness": freshness,
             "next_actions": next_actions,
             "state": {
+                "active_round": state.get("active_round"),
                 "blocked_by": state.get("blocked_by"),
                 "contract": state.get("contract"),
                 "expected_gap_checks": state.get("guidance", {}).get("expected_gap_checks", []),
@@ -1444,6 +1597,115 @@ def resume_command(args: argparse.Namespace) -> int:
             ),
             "status": "success",
             "summary": summary,
+        }
+    )
+
+
+def context_command(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace)
+    state_path = state_path_for(workspace_root, args.host)
+    state = load_state(state_path)
+    host = host_profile(args.host)
+    if not state:
+        payload = {
+            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "host": host,
+            "next_actions": ["Initialize a run with `init` before asking for runtime context."],
+            "status": "warning",
+            "summary": f"No Superloop harness state exists for {workspace_root.name}.",
+        }
+        if args.format == "json":
+            return emit(payload)
+        return emit_markdown(
+            f"# Superloop Runtime Context\n\nNo Superloop harness state exists for `{workspace_root}`.\n\nState path: `{state_path}`"
+        )
+
+    changed = maybe_close_for_budget(state)
+    if changed:
+        save_state(state_path, state)
+
+    context = build_runtime_context(state, workspace_root, state_path, host)
+    if args.format == "json":
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "context": context,
+                "host": host,
+                "status": "success",
+                "summary": f"Rendered Superloop runtime context for {workspace_root.name}.",
+            }
+        )
+
+    return emit_markdown(render_runtime_context_markdown(context))
+
+
+def start_round_command(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace)
+    state_path = state_path_for(workspace_root, args.host)
+    state = load_state(state_path)
+    if not state:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": ["Run `init` before starting a round."],
+                "status": "error",
+                "summary": "Cannot start a round without an initialized Superloop harness state.",
+            },
+            exit_code=1,
+        )
+
+    if state.get("active_round") and not args.replace:
+        return emit(
+            {
+                "active_round": state["active_round"],
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": [
+                    "Record the active round before starting another one, or rerun `start-round --replace` if the active round is stale."
+                ],
+                "status": "error",
+                "summary": "A Superloop round is already active.",
+            },
+            exit_code=1,
+        )
+
+    if state.get("status") != "active":
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": [
+                    "Resume or reinitialize the run before starting a new implementation round."
+                ],
+                "status": "error",
+                "summary": f"Cannot start a round while run status is `{state.get('status')}`.",
+            },
+            exit_code=1,
+        )
+
+    active_round = {
+        "change": args.change,
+        "current_gate": args.current_gate or state.get("contract", {}).get("current_gate"),
+        "hypothesis": args.hypothesis,
+        "round_gate": args.round_gate,
+        "round_number": len(state.get("rounds", [])) + 1,
+        "started_at": now_iso(),
+    }
+    state["active_round"] = active_round
+    state["updated_at"] = now_iso()
+    save_state(state_path, state)
+
+    return emit(
+        {
+            "active_round": active_round,
+            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "host": host_profile(args.host),
+            "next_actions": [
+                "Execute the focused round, verify it mechanically, then call `record` to close the active round."
+            ],
+            "status": "success",
+            "summary": f"Started Superloop round {active_round['round_number']}.",
         }
     )
 
@@ -1534,6 +1796,33 @@ def record_command(args: argparse.Namespace) -> int:
             }
         )
 
+    active_round = state.get("active_round") or {}
+    hypothesis = args.hypothesis or active_round.get("hypothesis")
+    change = args.change or active_round.get("change")
+    round_gate = args.round_gate or active_round.get("round_gate")
+    missing_record_fields = [
+        name
+        for name, value in [
+            ("--hypothesis", hypothesis),
+            ("--change", change),
+            ("--round-gate", round_gate),
+        ]
+        if not value
+    ]
+    if missing_record_fields:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": [
+                    f"Provide {', '.join(missing_record_fields)} or start the round with `start-round` before recording it."
+                ],
+                "status": "error",
+                "summary": "Cannot record a round without round identity fields.",
+            },
+            exit_code=1,
+        )
+
     if args.round_gate_result not in ROUND_GATE_RESULTS:
         raise ValueError(f"Unexpected round gate result: {args.round_gate_result}")
 
@@ -1542,8 +1831,9 @@ def record_command(args: argparse.Namespace) -> int:
         raise ValueError(f"Unexpected gate status: {args.gate_status}")
 
     remaining_gap_ledger = normalize_remaining_gaps(args.remaining_gap)
-    if not remaining_gap_ledger:
+    if not args.remaining_gap:
         remaining_gap_ledger = normalize_remaining_gaps(state.get("remaining_gap_ledger", []))
+    completion_evidence = normalize_completion_evidence(args.completion_evidence)
     blocked_by = args.blocked_by
     resume_condition = args.resume_condition
 
@@ -1554,6 +1844,20 @@ def record_command(args: argparse.Namespace) -> int:
 
     can_continue = not args.cannot_continue and not args.would_exceed_contract and not blocked_by
     mission_complete = args.mission_complete
+    if mission_complete and not completion_evidence:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "completion_audit_checklist": COMPLETION_AUDIT_CHECKLIST,
+                "host": host_profile(args.host),
+                "next_actions": [
+                    "Provide at least one `--completion-evidence` item before recording a mission-complete round."
+                ],
+                "status": "error",
+                "summary": "Mission completion requires explicit completion evidence.",
+            },
+            exit_code=1,
+        )
     success_stop = (mission_complete or args.stop_rule_satisfied) and not remaining_gap_ledger
     projected_budget = budget_snapshot(state, additional_rounds=1)
     budget_exhausted = projected_budget["rounds_exhausted"] or projected_budget["timebox_exhausted"]
@@ -1611,19 +1915,20 @@ def record_command(args: argparse.Namespace) -> int:
         stop_reason=stop_reason,
     )
     repeated_failures = repeated_failure_count(state, failure_class) + (1 if failure_class else 0)
-    failure_sig = failure_signature(failure_class, blocked_by, args.round_gate)
+    failure_sig = failure_signature(failure_class, blocked_by, round_gate)
     failure_signature_repeats = repeated_failure_signature_count(state.get("rounds", []), failure_sig)
     round_number = len(state.get("rounds", [])) + 1
     round_record = {
         "round_number": round_number,
         "recorded_at": now_iso(),
-        "hypothesis": args.hypothesis,
-        "change": args.change,
-        "round_gate": args.round_gate,
+        "hypothesis": hypothesis,
+        "change": change,
+        "round_gate": round_gate,
         "round_gate_result": args.round_gate_result,
         "gate_status": gate_status,
         "next_round": next_round,
         "remaining_gap_ledger": remaining_gap_ledger,
+        "completion_evidence": completion_evidence,
         "mission_complete": mission_complete,
         "stop_rule_satisfied": args.stop_rule_satisfied,
         "blocked_by": blocked_by,
@@ -1638,6 +1943,7 @@ def record_command(args: argparse.Namespace) -> int:
     }
 
     state["rounds"].append(round_record)
+    state["active_round"] = None
     state["remaining_gap_ledger"] = remaining_gap_ledger
     state["next_round"] = next_round
     state["blocked_by"] = blocked_by
@@ -1675,7 +1981,9 @@ def record_command(args: argparse.Namespace) -> int:
             "host": host_profile(args.host),
             "next_actions": next_actions,
             "state": {
+                "active_round": state.get("active_round"),
                 "blocked_by": blocked_by,
+                "completion_evidence": completion_evidence,
                 "failure_class": failure_class,
                 "failure_repeat_count": failure_signature_repeats,
                 "failure_signature": failure_sig,
@@ -1729,6 +2037,7 @@ def render_report_markdown(
         item("Status", state.get("status")),
         item("Last verdict", state.get("last_verdict")),
         item("Stop reason", state.get("stop_reason")),
+        item("Active round", state.get("active_round")),
         item("Next round", state.get("next_round")),
         item("Blocked by", state.get("blocked_by")),
         item("Resume condition", state.get("resume_condition")),
@@ -1770,6 +2079,7 @@ def render_report_markdown(
                     item("Gate status", round_record.get("gate_status")),
                     item("Verdict", round_record.get("verdict")),
                     item("Remaining gaps", round_record.get("remaining_gap_ledger")),
+                    item("Completion evidence", round_record.get("completion_evidence")),
                     item("Failure class", failure_class),
                     item("Failure signature", round_record.get("failure_signature")),
                     item("Failure repeat count", round_record.get("failure_repeat_count")),
@@ -1976,18 +2286,42 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--host", default="auto", type=normalize_host)
     resume_parser.set_defaults(func=resume_command)
 
+    context_parser = subparsers.add_parser(
+        "context",
+        aliases=["next-prompt"],
+        help="Render next-round runtime context from persisted Superloop state.",
+    )
+    context_parser.add_argument("--workspace")
+    context_parser.add_argument("--host", default="auto", type=normalize_host)
+    context_parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    context_parser.set_defaults(func=context_command)
+
+    start_round_parser = subparsers.add_parser(
+        "start-round",
+        help="Persist the in-flight round before executing it.",
+    )
+    start_round_parser.add_argument("--workspace")
+    start_round_parser.add_argument("--host", default="auto", type=normalize_host)
+    start_round_parser.add_argument("--hypothesis", required=True)
+    start_round_parser.add_argument("--change", required=True)
+    start_round_parser.add_argument("--round-gate", required=True)
+    start_round_parser.add_argument("--current-gate")
+    start_round_parser.add_argument("--replace", action="store_true")
+    start_round_parser.set_defaults(func=start_round_command)
+
     record_parser = subparsers.add_parser(
         "record", help="Persist the latest Superloop round and compute the loop verdict."
     )
     record_parser.add_argument("--workspace")
     record_parser.add_argument("--host", default="auto", type=normalize_host)
-    record_parser.add_argument("--hypothesis", required=True)
-    record_parser.add_argument("--change", required=True)
-    record_parser.add_argument("--round-gate", required=True)
+    record_parser.add_argument("--hypothesis")
+    record_parser.add_argument("--change")
+    record_parser.add_argument("--round-gate")
     record_parser.add_argument("--round-gate-result", required=True, choices=sorted(ROUND_GATE_RESULTS))
     record_parser.add_argument("--gate-status", "--stage-status", dest="gate_status", required=True, choices=sorted(ACCEPTED_GATE_STATUSES))
     record_parser.add_argument("--next-round")
     record_parser.add_argument("--remaining-gap", action="append", default=[])
+    record_parser.add_argument("--completion-evidence", action="append", default=[])
     record_parser.add_argument("--mission-complete", "--top-level-goal-met", dest="mission_complete", action="store_true")
     record_parser.add_argument("--stop-rule-satisfied", action="store_true")
     record_parser.add_argument("--blocked-by")

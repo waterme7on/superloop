@@ -86,6 +86,15 @@ If the ask changed in the same workspace, do not silently continue the loaded ru
 Call `init` without `--continue-existing` and Superloop will archive the previous run
 before it starts a fresh mission.
 
+Render the next-round runtime context:
+
+```bash
+"$SUPERLOOP_HARNESS" context --workspace /path/to/repo
+```
+
+`context` converts the stored contract, budget, active round, remaining gaps, and
+completion audit checklist into a prompt-shaped handoff for the next agent turn.
+
 Initialize a new run:
 
 ```bash
@@ -122,11 +131,14 @@ Preflight a risky stage:
 Record a round:
 
 ```bash
-"$SUPERLOOP_HARNESS" record \
+"$SUPERLOOP_HARNESS" start-round \
   --workspace /path/to/repo \
   --hypothesis "Simplifying setup will unblock the main path" \
   --change "remove one blocking step and update the smoke check" \
-  --round-gate "A fresh run completes once without manual rescue" \
+  --round-gate "A fresh run completes once without manual rescue"
+
+"$SUPERLOOP_HARNESS" record \
+  --workspace /path/to/repo \
   --round-gate-result hard-pass \
   --gate-status gate-complete \
   --next-round "tighten the fallback path and verify it"
@@ -158,6 +170,9 @@ more budget on identical retries.
 For terminal rounds, omit `--remaining-gap` or use a no-gap sentinel such as `none`.
 The harness now normalizes common values like `none` and `no remaining gaps` so a completed
 run stops cleanly instead of asking for another round.
+
+For mission-complete rounds, include explicit `--completion-evidence` entries.
+This keeps the stop decision tied to proof instead of intent or partial progress.
 
 ## Contract model
 

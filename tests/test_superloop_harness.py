@@ -21,20 +21,28 @@ class SuperloopHarnessTests(unittest.TestCase):
         self.state_home = self.root / "state"
 
     def run_harness(self, *args: str, env: dict[str, str] | None = None) -> dict:
+        result = self.run_harness_process(*args, env=env, check=True)
+        return json.loads(result.stdout)
+
+    def run_harness_process(
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+        check: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         command = [sys.executable, str(HARNESS), *args]
         merged_env = os.environ.copy()
         merged_env["SUPERLOOP_STATE_HOME"] = str(self.state_home)
         if env:
             merged_env.update(env)
 
-        result = subprocess.run(
+        return subprocess.run(
             command,
-            check=True,
+            check=check,
             capture_output=True,
             text=True,
             env=merged_env,
         )
-        return json.loads(result.stdout)
 
     def test_init_archives_old_run_when_starting_new_mission(self) -> None:
         first = self.run_harness(
@@ -269,6 +277,235 @@ class SuperloopHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["status_card"]["classification"], "workflow-syntax")
+
+    def test_context_renders_next_round_runtime_context(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Make the agent harness operator-ready",
+            "--workstream",
+            "agent harness",
+            "--max-rounds",
+            "3",
+        )
+        self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "A first focused round will expose the next gap",
+            "--change",
+            "Captured the initial gate and next round",
+            "--round-gate",
+            "The initial state is recorded",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-in-progress",
+            "--next-round",
+            "Render runtime context before the next round",
+            "--remaining-gap",
+            "Next round context is not yet generated",
+        )
+
+        payload = self.run_harness(
+            "context",
+            "--workspace",
+            str(self.workspace),
+            "--format",
+            "json",
+        )
+
+        context = payload["context"]
+        self.assertEqual(context["contract"]["goal"], "Make the agent harness operator-ready")
+        self.assertEqual(context["next_round"], "Render runtime context before the next round")
+        self.assertEqual(context["budget_status"]["rounds_used"], 1)
+        self.assertTrue(context["completion_audit_checklist"])
+        self.assertTrue(any("do not shrink" in directive for directive in context["directives"]))
+
+        markdown = self.run_harness_process(
+            "context",
+            "--workspace",
+            str(self.workspace),
+            check=True,
+        ).stdout
+        self.assertIn("## Completion Audit", markdown)
+        self.assertIn("Do not claim mission completion", markdown)
+
+    def test_start_round_persists_in_flight_state_and_record_uses_it(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Make the harness resumable",
+            "--workstream",
+            "agent harness",
+        )
+
+        started = self.run_harness(
+            "start-round",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "An in-flight marker makes interrupted work recoverable",
+            "--change",
+            "Persist active round metadata before execution",
+            "--round-gate",
+            "Resume shows the active round",
+        )
+        self.assertEqual(started["active_round"]["round_number"], 1)
+
+        resumed = self.run_harness("resume", "--workspace", str(self.workspace))
+        self.assertEqual(
+            resumed["state"]["active_round"]["hypothesis"],
+            "An in-flight marker makes interrupted work recoverable",
+        )
+
+        recorded = self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-in-progress",
+            "--next-round",
+            "Use context before the next implementation round",
+            "--remaining-gap",
+            "Completion evidence is not wired yet",
+        )
+
+        self.assertIsNone(recorded["state"]["active_round"])
+        report = self.run_harness(
+            "report",
+            "--workspace",
+            str(self.workspace),
+            "--format",
+            "json",
+        )
+        first_round = report["state"]["rounds"][0]
+        self.assertEqual(
+            first_round["round_gate"],
+            "Resume shows the active round",
+        )
+
+    def test_mission_complete_requires_completion_evidence(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Finish the mission with proof",
+            "--workstream",
+            "agent harness",
+        )
+
+        failed = self.run_harness_process(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The mission is complete",
+            "--change",
+            "Verified all requirements",
+            "--round-gate",
+            "All checks pass",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--mission-complete",
+        )
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(
+            json.loads(failed.stdout)["summary"],
+            "Mission completion requires explicit completion evidence.",
+        )
+
+        completed = self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The mission is complete",
+            "--change",
+            "Verified all requirements",
+            "--round-gate",
+            "All checks pass",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--mission-complete",
+            "--completion-evidence",
+            "unit tests passed",
+            "--completion-evidence",
+            "runtime context includes completion audit",
+        )
+
+        self.assertEqual(completed["verdict"], "stop")
+        self.assertEqual(completed["state"]["stop_reason"], "mission-complete")
+        self.assertEqual(
+            completed["state"]["completion_evidence"],
+            ["unit tests passed", "runtime context includes completion audit"],
+        )
+
+    def test_no_gap_sentinel_clears_previous_remaining_gaps(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Close existing gaps with proof",
+            "--workstream",
+            "agent harness",
+        )
+        self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "A first round leaves one gap",
+            "--change",
+            "Captured the gap",
+            "--round-gate",
+            "Gap ledger exists",
+            "--round-gate-result",
+            "soft-pass",
+            "--gate-status",
+            "gate-in-progress",
+            "--next-round",
+            "Close the final proof gap",
+            "--remaining-gap",
+            "final proof is missing",
+        )
+
+        completed = self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The final proof gap is closed",
+            "--change",
+            "Verified the completion proof",
+            "--round-gate",
+            "No gaps remain",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--remaining-gap",
+            "none",
+            "--mission-complete",
+            "--completion-evidence",
+            "final proof command passed",
+        )
+
+        self.assertEqual(completed["verdict"], "stop")
+        self.assertEqual(completed["state"]["remaining_gap_ledger"], [])
 
     def test_cli_module_is_importable(self) -> None:
         env = os.environ.copy()

@@ -58,6 +58,8 @@ Then:
 4. before risky stages such as deploy or external-service hops, call `preflight` with required/optional env keys when they matter
 5. after every substantial round, call `record`
 6. use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
+7. on resumed or long-running work, call `context` to render the next-round runtime context before deciding from chat memory alone
+8. for interruptible rounds, call `start-round` before execution so a later resume can see the in-flight hypothesis, change, and round gate
 
 Minimal init example:
 
@@ -83,6 +85,23 @@ Minimal preflight example:
   --optional-env SENTRY_AUTH_TOKEN
 ```
 
+Runtime context example:
+
+```bash
+"$SUPERLOOP_HARNESS" context \
+  --workspace /path/to/repo
+```
+
+Minimal start-round example:
+
+```bash
+"$SUPERLOOP_HARNESS" start-round \
+  --workspace /path/to/repo \
+  --hypothesis "Rendering runtime context will reduce goal drift after resume" \
+  --change "generate the context artifact before editing" \
+  --round-gate "The next agent can see the exact current mission and round"
+```
+
 Minimal round record example:
 
 ```bash
@@ -93,6 +112,20 @@ Minimal round record example:
   --round-gate-result "hard-pass" \
   --gate-status "gate-complete" \
   --next-round "tighten failure handling and verify the fallback path"
+```
+
+Mission-complete record example:
+
+```bash
+"$SUPERLOOP_HARNESS" record \
+  --hypothesis "The remaining gaps are closed" \
+  --change "verify the final contract requirements" \
+  --round-gate "Every required deliverable has direct evidence" \
+  --round-gate-result "hard-pass" \
+  --gate-status "gate-complete" \
+  --mission-complete \
+  --completion-evidence "targeted tests passed" \
+  --completion-evidence "runtime behavior verified"
 ```
 
 Visible run report example:
@@ -110,9 +143,10 @@ On the first response after this skill triggers:
 2. restate the mission in one sentence
 3. state the current gate
 4. list explicit assumptions if the user did not provide a full contract
-5. say what this round will change
-6. say how this round will be verified
-7. say what budget remains if max rounds or a timebox is active
+5. when a run exists, render or summarize `context` so the next move is based on persisted state
+6. say what this round will change
+7. say how this round will be verified
+8. say what budget remains if max rounds or a timebox is active
 
 If key information is missing, ask the smallest useful batch of questions. If safe defaults exist, state them, initialize the harness with those defaults, start with the first round, and keep going until a stop condition is met. If they do not, stop after the questions and wait.
 
@@ -125,6 +159,7 @@ The default mode is a continuing loop:
 That means:
 
 - the agent should plan the current round in a compact way
+- if the round may be interrupted, the agent should persist it with `start-round`
 - the agent should then execute that round without asking for per-step approval
 - the agent should verify the result mechanically
 - the agent should record the round through the harness, report the keep or discard decision, choose the next round, and continue unless an explicit stop condition has been met
@@ -280,6 +315,7 @@ Before stopping, ask:
 If stopping because the budget was exhausted, say that explicitly.
 Budget exhaustion is a valid stop reason.
 It is not the same thing as mission complete.
+When reporting `--mission-complete`, include `--completion-evidence` entries that point to the actual proof: passing checks, inspected files, runtime behavior, deployment state, or other authoritative evidence.
 
 ## Boundaries
 
