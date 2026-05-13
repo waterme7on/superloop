@@ -31,6 +31,20 @@ If `resume` loads a run but the user ask has clearly changed, do not silently in
 contract. Start a fresh mission with `init` and reserve `init --continue-existing` for cases
 where the mission is intentionally the same.
 
+### Context
+
+Render the next-round runtime context before continuing a long-running mission:
+
+```bash
+"$SUPERLOOP_HARNESS" context --workspace /path/to/repo
+"$SUPERLOOP_HARNESS" context --workspace /path/to/repo --format json
+```
+
+`context` is the Superloop equivalent of a runtime goal injection. It turns the
+persisted contract, budget, active round, next round, remaining gaps, and
+completion audit checklist into a prompt-shaped artifact. Use it when a resumed
+agent needs the current mission state without relying on chat memory.
+
 ### Init
 
 Run `init` only when `resume` reports no active run:
@@ -126,6 +140,20 @@ the latest deploy or failure card without repeating those flags each step.
 
 ### Record
 
+For interruptible work, start the round before editing:
+
+```bash
+"$SUPERLOOP_HARNESS" start-round \
+  --hypothesis "..." \
+  --change "..." \
+  --round-gate "..."
+```
+
+`start-round` stores an in-flight round. If the session is interrupted, `resume`
+and `context` will show that active round so the next agent can finish or replace
+it deliberately. After `start-round`, `record` may omit `--hypothesis`,
+`--change`, and `--round-gate`; the harness will use the active round values.
+
 After each substantial round:
 
 ```bash
@@ -141,6 +169,7 @@ After each substantial round:
 Optional inputs:
 
 - `--remaining-gap "..."` may be repeated
+- `--completion-evidence "..."` may be repeated
 - `--mission-complete`
 - `--stop-rule-satisfied`
 - `--blocked-by "..."`
@@ -151,6 +180,10 @@ Optional inputs:
 If a round is actually complete, omit `--remaining-gap` or use a no-gap sentinel such as
 `--remaining-gap "none"`. The harness normalizes common no-gap strings so a human-style
 completion note does not accidentally force an extra round.
+
+When using `--mission-complete`, provide at least one `--completion-evidence`
+item. The harness rejects mission completion without evidence so a loop cannot
+turn partial progress into a completed mission by assertion alone.
 
 The harness returns a verdict:
 
