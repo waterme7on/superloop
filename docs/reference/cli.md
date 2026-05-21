@@ -16,12 +16,28 @@ Installed host paths are also valid:
 - Claude Code: `$CLAUDE_HOME/skills/superloop/scripts/superloop_cli.sh`
 - Generic CLI: `$SUPERLOOP_HOME/superloop/scripts/superloop_cli.sh`
 
+Windows PowerShell uses the `.ps1` wrapper instead:
+
+```powershell
+$env:SUPERLOOP_HARNESS = Join-Path $env:SUPERLOOP_HOME "superloop\scripts\superloop_cli.ps1"
+```
+
+Installed host paths are also valid on Windows:
+
+- Codex: `$env:CODEX_HOME\skills\superloop\scripts\superloop_cli.ps1`
+- Claude Code: `$env:CLAUDE_HOME\skills\superloop\scripts\superloop_cli.ps1`
+- Generic CLI: `$env:SUPERLOOP_HOME\superloop\scripts\superloop_cli.ps1`
+
 ### Resume
 
 Run this first in the current workspace:
 
 ```bash
 "$SUPERLOOP_HARNESS" resume
+```
+
+```powershell
+& $env:SUPERLOOP_HARNESS resume
 ```
 
 If an active run exists, use its stored contract, next round, blocker, budget, and stop rule
@@ -215,6 +231,12 @@ Check which host adapter is active and whether an installed copy has drifted:
 "$SUPERLOOP_HARNESS" doctor --host codex --source /path/to/superloop
 "$SUPERLOOP_HARNESS" doctor --host claude-code --source /path/to/superloop
 "$SUPERLOOP_HARNESS" doctor --host generic --source /path/to/superloop
+```
+
+```powershell
+& $env:SUPERLOOP_HARNESS doctor --host codex --source C:\path\to\superloop
+& $env:SUPERLOOP_HARNESS doctor --host claude-code --source C:\path\to\superloop
+& $env:SUPERLOOP_HARNESS doctor --host generic --source C:\path\to\superloop
 ```
 
 Use `--check` when the command should return non-zero on missing or drifted installs.

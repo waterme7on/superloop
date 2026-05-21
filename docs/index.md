@@ -8,6 +8,7 @@ Start here when editing or operating Superloop.
    - [Codex](install-codex.md)
    - [Claude Code](install-claude-code.md)
    - [Generic CLI](install-generic-cli.md)
+   - [Windows PowerShell](install-windows.md)
 2. Read the core model: [core.md](core.md)
 3. Use the CLI reference: [reference/cli.md](reference/cli.md)
 4. Check host paths and metadata: [host-adapters.md](host-adapters.md)
@@ -18,7 +19,9 @@ Start here when editing or operating Superloop.
 - `src/superloop/`: importable harness implementation
 - `scripts/superloop_harness.py`: compatibility wrapper for older commands
 - `scripts/superloop_cli.sh`: stable shell entrypoint
+- `scripts/superloop_cli.ps1`: stable PowerShell entrypoint for Windows
 - `scripts/install.sh`: host-aware install/sync wrapper
+- `scripts/install.ps1`: host-aware PowerShell install/sync wrapper
 - `agents/openai.yaml`: Codex/OpenAI host metadata
 - `docs/`: maintained docs entrypoint, install notes, and CLI reference
 - `references/`: deeper operating-model notes that are linked from `SKILL.md`

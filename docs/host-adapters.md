@@ -15,6 +15,15 @@ Use `auto` when the harness should infer the host from the installed script path
 ./scripts/superloop_cli.sh doctor --host generic
 ```
 
+Windows PowerShell:
+
+```powershell
+.\scripts\superloop_cli.ps1 doctor --host auto
+.\scripts\superloop_cli.ps1 doctor --host codex
+.\scripts\superloop_cli.ps1 doctor --host claude-code
+.\scripts\superloop_cli.ps1 doctor --host generic
+```
+
 ## Codex
 
 - Home: `$CODEX_HOME`, defaulting to `~/.codex`
@@ -48,3 +57,7 @@ presenting `CODEX_HOME` as the universal default.
 
 The implementation is shared through `src/superloop/`; host adapters select
 paths and metadata only.
+
+On Windows, use `scripts\superloop_cli.ps1` and `scripts\install.ps1`. The host
+paths and state paths are the same logical locations under `%USERPROFILE%`, but
+the PowerShell wrappers avoid any dependency on Bash, Git Bash, or WSL.

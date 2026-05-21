@@ -191,6 +191,21 @@ def installed_path_for_host(host: str) -> Path:
     return Path(os.environ.get("SUPERLOOP_INSTALL_PATH", superloop_home() / "superloop")).expanduser()
 
 
+def default_harness_path(installed_path: Path) -> Path:
+    script_name = "superloop_cli.ps1" if os.name == "nt" else "superloop_cli.sh"
+    return installed_path / "scripts" / script_name
+
+
+def install_command_hint(source: Path, host: str) -> str:
+    if os.name == "nt":
+        script = source / "scripts" / "install.ps1"
+        return (
+            f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" '
+            f'--host {host} --source "{source}"'
+        )
+    return f"{source / 'scripts' / 'install.sh'} --host {host} --source {source}"
+
+
 def host_profile(host_arg: str | None = None) -> dict[str, Any]:
     host = detect_host(host_arg)
     installed_path = installed_path_for_host(host)
@@ -209,7 +224,9 @@ def host_profile(host_arg: str | None = None) -> dict[str, Any]:
         "host": host,
         "host_home": str(host_home),
         "installed_path": str(installed_path),
-        "harness_path": str(installed_path / "scripts" / "superloop_cli.sh"),
+        "harness_path": str(default_harness_path(installed_path)),
+        "shell_harness_path": str(installed_path / "scripts" / "superloop_cli.sh"),
+        "powershell_harness_path": str(installed_path / "scripts" / "superloop_cli.ps1"),
         "state_home": str(default_state_home(host)),
         "metadata_files": metadata_files,
     }
@@ -2147,9 +2164,7 @@ def doctor_command(args: argparse.Namespace) -> int:
         if same_tree
         else tree_diff_summary(source, installed)
     )
-    install_command = (
-        f"{source / 'scripts' / 'install.sh'} --host {host['host']} --source {source}"
-    )
+    install_command = install_command_hint(source, host["host"])
     exit_code = 0
     status = "success"
     next_actions: list[str] = []

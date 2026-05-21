@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HARNESS = REPO_ROOT / "scripts" / "superloop_harness.py"
+POWERSHELL_CLI = REPO_ROOT / "scripts" / "superloop_cli.ps1"
+POWERSHELL_INSTALL = REPO_ROOT / "scripts" / "install.ps1"
+
+
+def powershell_executable() -> str | None:
+    return shutil.which("pwsh") or shutil.which("powershell")
 
 
 class SuperloopHarnessTests(unittest.TestCase):
@@ -523,6 +530,85 @@ class SuperloopHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(Path(result.stdout.strip()), REPO_ROOT)
+
+    @unittest.skipUnless(powershell_executable(), "PowerShell is not available")
+    def test_powershell_cli_wrapper_runs_resume(self) -> None:
+        env = os.environ.copy()
+        env["SUPERLOOP_STATE_HOME"] = str(self.state_home)
+        result = subprocess.run(
+            [
+                powershell_executable(),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(POWERSHELL_CLI),
+                "resume",
+                "--workspace",
+                str(self.workspace),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "warning")
+        self.assertIn("No Superloop harness state exists", payload["summary"])
+
+    @unittest.skipUnless(powershell_executable(), "PowerShell is not available")
+    def test_powershell_install_wrapper_syncs_generic_install(self) -> None:
+        env = os.environ.copy()
+        env["SUPERLOOP_HOME"] = str(self.root / "superloop-home")
+        env["SUPERLOOP_STATE_HOME"] = str(self.state_home)
+
+        install_result = subprocess.run(
+            [
+                powershell_executable(),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(POWERSHELL_INSTALL),
+                "--host",
+                "generic",
+                "--source",
+                str(REPO_ROOT),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        install_payload = json.loads(install_result.stdout)
+        installed_path = Path(install_payload["host"]["installed_path"])
+        self.assertEqual(install_payload["status"], "success")
+        self.assertTrue((installed_path / "scripts" / "superloop_cli.ps1").exists())
+
+        check_result = subprocess.run(
+            [
+                powershell_executable(),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(POWERSHELL_INSTALL),
+                "--host",
+                "generic",
+                "--source",
+                str(REPO_ROOT),
+                "--check",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        check_payload = json.loads(check_result.stdout)
+        self.assertEqual(check_payload["status"], "success")
 
 
 if __name__ == "__main__":

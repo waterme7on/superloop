@@ -20,8 +20,10 @@ This repo includes one ready-to-run implementation for local skill environments 
 - `references/`: deeper operating-model notes for mission contracts, loop protocol, finish standards, and workstream gates
 - `src/superloop/`: importable harness implementation
 - `scripts/superloop_cli.sh`: shell entrypoint for the harness
+- `scripts/superloop_cli.ps1`: native PowerShell entrypoint for Windows
 - `scripts/superloop_harness.py`: compatibility wrapper for older commands
 - `scripts/install.sh`: host-aware install/sync wrapper
+- `scripts/install.ps1`: native PowerShell install/sync wrapper for Windows
 
 ## Architecture
 
@@ -52,6 +54,19 @@ Choose the host you want to use:
 ./scripts/install.sh --host generic
 ```
 
+On Windows PowerShell, use the native wrappers:
+
+```powershell
+# Codex
+.\scripts\install.ps1 --host codex
+
+# Claude Code
+.\scripts\install.ps1 --host claude-code
+
+# Generic CLI copy under $env:USERPROFILE\.superloop\superloop
+.\scripts\install.ps1 --host generic
+```
+
 The installed copy can be checked later:
 
 ```bash
@@ -60,11 +75,18 @@ The installed copy can be checked later:
 ./scripts/superloop_cli.sh doctor --host generic
 ```
 
+```powershell
+.\scripts\superloop_cli.ps1 doctor --host codex
+.\scripts\superloop_cli.ps1 doctor --host claude-code
+.\scripts\superloop_cli.ps1 doctor --host generic
+```
+
 Start with [docs/index.md](docs/index.md). Host-specific notes live in:
 
 - [docs/install-codex.md](docs/install-codex.md)
 - [docs/install-claude-code.md](docs/install-claude-code.md)
 - [docs/install-generic-cli.md](docs/install-generic-cli.md)
+- [docs/install-windows.md](docs/install-windows.md)
 - [docs/host-adapters.md](docs/host-adapters.md)
 - [docs/reference/cli.md](docs/reference/cli.md)
 
@@ -76,10 +98,20 @@ Run the harness directly from the source checkout or from the installed host pat
 export SUPERLOOP_HARNESS="$(pwd)/scripts/superloop_cli.sh"
 ```
 
+Windows PowerShell:
+
+```powershell
+$env:SUPERLOOP_HARNESS = Join-Path $PWD "scripts\superloop_cli.ps1"
+```
+
 Resume an existing run:
 
 ```bash
 "$SUPERLOOP_HARNESS" resume --workspace /path/to/repo
+```
+
+```powershell
+& $env:SUPERLOOP_HARNESS resume --workspace C:\path\to\repo
 ```
 
 If the ask changed in the same workspace, do not silently continue the loaded run.
@@ -242,6 +274,15 @@ python3 -m py_compile src/superloop/cli.py
 ./scripts/superloop_cli.sh resume --workspace "$(pwd)"
 ./scripts/superloop_cli.sh doctor --host codex --source "$(pwd)"
 ./scripts/superloop_cli.sh doctor --host claude-code --source "$(pwd)"
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m py_compile scripts\superloop_harness.py
+python -m py_compile src\superloop\cli.py
+.\scripts\superloop_cli.ps1 resume --workspace $PWD
+.\scripts\superloop_cli.ps1 doctor --host generic --source $PWD
 ```
 
 If the second command returns a warning about missing state, that is expected for a fresh workspace.

@@ -6,6 +6,12 @@ From the Superloop source checkout:
 ./scripts/install.sh --host claude-code
 ```
 
+Windows PowerShell:
+
+```powershell
+.\scripts\install.ps1 --host claude-code
+```
+
 The installer syncs the source tree into:
 
 ```text
@@ -21,12 +27,23 @@ Check the install:
 ./scripts/install.sh --host claude-code --source "$(pwd)" --check
 ```
 
+```powershell
+.\scripts\superloop_cli.ps1 doctor --host claude-code --source $PWD
+.\scripts\install.ps1 --host claude-code --source $PWD --check
+```
+
 Use the installed harness:
 
 ```bash
 export CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 export SUPERLOOP_HARNESS="$CLAUDE_HOME/skills/superloop/scripts/superloop_cli.sh"
 "$SUPERLOOP_HARNESS" resume --workspace /path/to/repo
+```
+
+```powershell
+$env:CLAUDE_HOME = if ($env:CLAUDE_HOME) { $env:CLAUDE_HOME } else { Join-Path $HOME ".claude" }
+$env:SUPERLOOP_HARNESS = Join-Path $env:CLAUDE_HOME "skills\superloop\scripts\superloop_cli.ps1"
+& $env:SUPERLOOP_HARNESS resume --workspace C:\path\to\repo
 ```
 
 Claude Code state is host-specific:
