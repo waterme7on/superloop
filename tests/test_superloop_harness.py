@@ -47,6 +47,7 @@ class SuperloopHarnessTests(unittest.TestCase):
             command,
             check=check,
             capture_output=True,
+            encoding="utf-8",
             text=True,
             env=merged_env,
         )
@@ -525,6 +526,7 @@ class SuperloopHarnessTests(unittest.TestCase):
             ],
             check=True,
             capture_output=True,
+            encoding="utf-8",
             text=True,
             env=env,
         )
@@ -549,6 +551,7 @@ class SuperloopHarnessTests(unittest.TestCase):
             ],
             check=True,
             capture_output=True,
+            encoding="utf-8",
             text=True,
             env=env,
         )
@@ -578,6 +581,7 @@ class SuperloopHarnessTests(unittest.TestCase):
             ],
             check=True,
             capture_output=True,
+            encoding="utf-8",
             text=True,
             env=env,
         )
@@ -603,6 +607,7 @@ class SuperloopHarnessTests(unittest.TestCase):
             ],
             check=True,
             capture_output=True,
+            encoding="utf-8",
             text=True,
             env=env,
         )
