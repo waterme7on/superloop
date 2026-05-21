@@ -82,6 +82,13 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8")
+
+
 def now_iso() -> str:
     return now_utc().replace(microsecond=0).isoformat()
 
@@ -562,12 +569,15 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
 def load_state(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    return normalize_state(json.loads(path.read_text()))
+    return normalize_state(json.loads(path.read_text(encoding="utf-8")))
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    path.write_text(
+        json.dumps(state, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def emit(payload: dict[str, Any], exit_code: int = 0) -> int:
@@ -735,7 +745,8 @@ def write_install_manifest(source: Path, destination: Path, host: str) -> None:
         "state_home": str(default_state_home(host)),
     }
     (destination / ".superloop-install.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -2384,6 +2395,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
     return args.func(args)
