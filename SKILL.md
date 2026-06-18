@@ -56,10 +56,11 @@ Then:
 2. if `resume` loads an old run but the ask changed, call `init` without `--continue-existing` so the previous run is archived and the new mission starts cleanly
 3. use `init --continue-existing` only when you intentionally want to keep the same mission and budget while refreshing contract fields
 4. before risky stages such as deploy or external-service hops, call `preflight` with required/optional env keys when they matter
-5. after every substantial round, call `record`
-6. use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
-7. on resumed or long-running work, call `context` to render the next-round runtime context before deciding from chat memory alone
-8. for interruptible rounds, call `start-round` before execution so a later resume can see the in-flight hypothesis, change, and round gate
+5. when a round depends on tests, builds, smoke checks, or browser checks, run them through `verify` so the harness stores machine evidence
+6. after every substantial round, call `record`; use `--require-evidence` when the round gate should prove a named verification actually ran and passed
+7. use the harness verdict `continue`, `pause`, or `stop` instead of inventing one from prose alone
+8. on resumed or long-running work, call `context` to render the next-round runtime context before deciding from chat memory alone
+9. for interruptible rounds, call `start-round` before execution so a later resume can see the in-flight hypothesis, change, and round gate
 
 Minimal init example:
 
@@ -71,6 +72,7 @@ Minimal init example:
   --success-signal "The main workflow runs end to end with targeted checks passing" \
   --current-gate "The next high-leverage change lands cleanly and can be verified" \
   --scope "code, docs, smoke checks" \
+  --required-evidence "check" \
   --max-rounds 5 \
   --timebox-minutes 90
 ```
@@ -83,6 +85,15 @@ Minimal preflight example:
   --stage deploy \
   --require-env VERCEL_TOKEN \
   --optional-env SENTRY_AUTH_TOKEN
+```
+
+Minimal verify example:
+
+```bash
+"$SUPERLOOP_HARNESS" verify \
+  --workspace /path/to/repo \
+  --name check \
+  -- npm run check
 ```
 
 Runtime context example:
@@ -111,6 +122,7 @@ Minimal round record example:
   --round-gate "A fresh run completes once without manual rescue" \
   --round-gate-result "hard-pass" \
   --gate-status "gate-complete" \
+  --require-evidence "check" \
   --next-round "tighten failure handling and verify the fallback path"
 ```
 
@@ -123,6 +135,7 @@ Mission-complete record example:
   --round-gate "Every required deliverable has direct evidence" \
   --round-gate-result "hard-pass" \
   --gate-status "gate-complete" \
+  --require-evidence "check" \
   --mission-complete \
   --completion-evidence "targeted tests passed" \
   --completion-evidence "runtime behavior verified"
@@ -161,8 +174,8 @@ That means:
 - the agent should plan the current round in a compact way
 - if the round may be interrupted, the agent should persist it with `start-round`
 - the agent should then execute that round without asking for per-step approval
-- the agent should verify the result mechanically
-- the agent should record the round through the harness, report the keep or discard decision, choose the next round, and continue unless an explicit stop condition has been met
+- the agent should verify the result mechanically; use `verify` for checks that must be proven by command execution
+- the agent should record the round through the harness, require machine evidence when appropriate, report the keep or discard decision, choose the next round, and continue unless an explicit stop condition has been met
 
 Do not stop after one round just because a report was produced.
 Do not claim `pause` or `stop` without a corresponding harness record.

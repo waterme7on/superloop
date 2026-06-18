@@ -136,6 +136,7 @@ Initialize a new run:
   --workstream "repo workflow" \
   --finish-standard workflow-ready \
   --scope "code, docs, smoke checks" \
+  --required-evidence check \
   --max-rounds 5 \
   --timebox-minutes 90
 ```
@@ -169,10 +170,16 @@ Record a round:
   --change "remove one blocking step and update the smoke check" \
   --round-gate "A fresh run completes once without manual rescue"
 
+"$SUPERLOOP_HARNESS" verify \
+  --workspace /path/to/repo \
+  --name check \
+  -- npm run check
+
 "$SUPERLOOP_HARNESS" record \
   --workspace /path/to/repo \
   --round-gate-result hard-pass \
   --gate-status gate-complete \
+  --require-evidence check \
   --next-round "tighten the fallback path and verify it"
 ```
 
@@ -205,6 +212,9 @@ run stops cleanly instead of asking for another round.
 
 For mission-complete rounds, include explicit `--completion-evidence` entries.
 This keeps the stop decision tied to proof instead of intent or partial progress.
+For gates that depend on tests or smoke checks, use `verify` and then require the
+result with `record --require-evidence`; otherwise the harness cannot distinguish
+between a real command run and an agent merely claiming it ran.
 
 ## Contract model
 
@@ -217,6 +227,7 @@ The harness contract centers on:
 - `Current Gate`
 - `Scope`
 - `Constraints`
+- `Required Evidence`
 - `Stop Rule`
 - `Max Rounds`
 - `Timebox Minutes`

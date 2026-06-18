@@ -461,6 +461,189 @@ class SuperloopHarnessTests(unittest.TestCase):
             ["unit tests passed", "runtime context includes completion audit"],
         )
 
+    def test_verify_records_machine_evidence_required_by_record(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Require machine evidence for hard pass",
+            "--workstream",
+            "agent harness",
+        )
+
+        missing = self.run_harness_process(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The gate is complete",
+            "--change",
+            "Claimed tests pass",
+            "--round-gate",
+            "Tests are verified",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--require-evidence",
+            "check",
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertEqual(
+            json.loads(missing.stdout)["summary"],
+            "Required verification evidence is missing or failed.",
+        )
+
+        failed_verify = self.run_harness_process(
+            "verify",
+            "--workspace",
+            str(self.workspace),
+            "--name",
+            "check",
+            "--",
+            sys.executable,
+            "-c",
+            "import sys; print('nope'); sys.exit(2)",
+        )
+        self.assertNotEqual(failed_verify.returncode, 0)
+        failed_payload = json.loads(failed_verify.stdout)
+        self.assertEqual(failed_payload["evidence"]["status"], "failure")
+
+        failed_gate = self.run_harness_process(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The gate is complete",
+            "--change",
+            "Claimed tests pass",
+            "--round-gate",
+            "Tests are verified",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--require-evidence",
+            "check",
+        )
+        self.assertNotEqual(failed_gate.returncode, 0)
+        self.assertIn("not successful", json.loads(failed_gate.stdout)["status_card"]["blocking_item"])
+
+        verified = self.run_harness(
+            "verify",
+            "--workspace",
+            str(self.workspace),
+            "--name",
+            "check",
+            "--",
+            sys.executable,
+            "-c",
+            "print('ok')",
+        )
+        self.assertEqual(verified["evidence"]["status"], "success")
+        self.assertIn("ok", verified["evidence"]["stdout_tail"])
+
+        recorded = self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The gate is complete",
+            "--change",
+            "Ran the verification through the harness",
+            "--round-gate",
+            "Tests are verified",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-in-progress",
+            "--require-evidence",
+            "check",
+            "--next-round",
+            "Use required evidence for mission completion",
+            "--remaining-gap",
+            "mission completion still needs final evidence",
+        )
+
+        self.assertEqual(recorded["verdict"], "continue")
+        self.assertEqual(recorded["state"]["required_evidence"], ["check"])
+        self.assertEqual(
+            recorded["state"]["verification_evidence_ids"],
+            [verified["evidence"]["id"]],
+        )
+
+    def test_contract_required_evidence_blocks_mission_complete_until_verified(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Require machine evidence from the mission contract",
+            "--workstream",
+            "agent harness",
+            "--required-evidence",
+            "unit",
+        )
+
+        blocked = self.run_harness_process(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The mission is complete",
+            "--change",
+            "Claimed final proof",
+            "--round-gate",
+            "Final proof exists",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--mission-complete",
+            "--completion-evidence",
+            "unit evidence should exist",
+        )
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertEqual(json.loads(blocked.stdout)["required_evidence"], ["unit"])
+
+        verified = self.run_harness(
+            "verify",
+            "--workspace",
+            str(self.workspace),
+            "--name",
+            "unit",
+            "--",
+            sys.executable,
+            "-c",
+            "print('unit ok')",
+        )
+
+        completed = self.run_harness(
+            "record",
+            "--workspace",
+            str(self.workspace),
+            "--hypothesis",
+            "The mission is complete",
+            "--change",
+            "Verified final proof through the harness",
+            "--round-gate",
+            "Final proof exists",
+            "--round-gate-result",
+            "hard-pass",
+            "--gate-status",
+            "gate-complete",
+            "--mission-complete",
+            "--completion-evidence",
+            "unit evidence exists",
+        )
+
+        self.assertEqual(completed["verdict"], "stop")
+        self.assertEqual(
+            completed["state"]["verification_evidence_ids"],
+            [verified["evidence"]["id"]],
+        )
+
     def test_no_gap_sentinel_clears_previous_remaining_gaps(self) -> None:
         self.run_harness(
             "init",

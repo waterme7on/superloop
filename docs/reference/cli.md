@@ -75,6 +75,7 @@ Run `init` only when `resume` reports no active run:
   --current-gate "..." \
   --scope "..." \
   --constraint "..." \
+  --required-evidence "check" \
   --max-rounds 5 \
   --timebox-minutes 90
 ```
@@ -94,6 +95,10 @@ Legacy compatibility:
 
 If `stop-rule` is omitted, the harness writes a budget-aware default that is stronger than "do one round and stop."
 
+Use `--required-evidence` when a mission should not record a hard-pass,
+gate-complete, or mission-complete round unless named verification evidence exists.
+That evidence must be created by `verify`, not by prose.
+
 ### Preflight
 
 For stages that depend on environment configuration, run a lightweight preflight first:
@@ -110,6 +115,30 @@ The harness will:
 - fail fast on missing required env vars
 - warn on missing optional env vars
 - return a small status card with classification, blocker, and recommended next action
+
+### Verify
+
+Run verification commands through the harness when the next `record` should prove
+that tests, builds, smoke checks, or browser checks actually executed:
+
+```bash
+"$SUPERLOOP_HARNESS" verify \
+  --workspace /path/to/repo \
+  --name check \
+  -- npm run check
+```
+
+`verify` stores machine evidence in Superloop state:
+
+- evidence id and name
+- command and working directory
+- started and ended timestamps
+- exit code and success/failure status
+- git branch, commit, and dirty status before and after the command
+- stdout/stderr tails plus an output hash
+
+If the command fails, the failure is still recorded as evidence, but it cannot
+satisfy `record --require-evidence`.
 
 ### Status Card
 
@@ -179,6 +208,7 @@ After each substantial round:
   --round-gate "..." \
   --round-gate-result "hard-pass|soft-pass|fail" \
   --gate-status "gate-complete|gate-in-progress|gate-blocked" \
+  --require-evidence "check" \
   --next-round "..."
 ```
 
@@ -186,6 +216,7 @@ Optional inputs:
 
 - `--remaining-gap "..."` may be repeated
 - `--completion-evidence "..."` may be repeated
+- `--require-evidence "..."` may be repeated
 - `--mission-complete`
 - `--stop-rule-satisfied`
 - `--blocked-by "..."`
@@ -200,6 +231,11 @@ completion note does not accidentally force an extra round.
 When using `--mission-complete`, provide at least one `--completion-evidence`
 item. The harness rejects mission completion without evidence so a loop cannot
 turn partial progress into a completed mission by assertion alone.
+
+When using `--require-evidence`, the harness rejects the record unless the latest
+matching evidence id or evidence name exists and has status `success`. Contract-level
+requirements from `init --required-evidence` are enforced automatically for hard-pass,
+gate-complete, and mission-complete records.
 
 The harness returns a verdict:
 

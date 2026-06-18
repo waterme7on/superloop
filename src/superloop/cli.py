@@ -18,6 +18,8 @@ from typing import Any
 
 
 STATE_VERSION = 3
+VERIFY_OUTPUT_TAIL_CHARS = 4000
+DEFAULT_VERIFY_TIMEOUT_SECONDS = 600
 HOST_CHOICES = {"auto", "generic", "codex", "claude-code"}
 HOST_ALIASES = {
     "claude": "claude-code",
@@ -285,6 +287,14 @@ def normalize_constraints(value: Any) -> list[str]:
     return [str(value)] if str(value).strip() else []
 
 
+def normalize_evidence_requirements(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return normalize_name_list([str(item) for item in value])
+    return normalize_name_list([str(value)])
+
+
 def normalize_finish_standard(value: str | None) -> str | None:
     if not value:
         return None
@@ -519,6 +529,9 @@ def normalize_contract(contract: dict[str, Any]) -> dict[str, Any]:
         "current_gate": current_gate,
         "scope": contract.get("scope"),
         "constraints": normalize_constraints(contract.get("constraints") or contract.get("constraint")),
+        "required_evidence": normalize_evidence_requirements(
+            contract.get("required_evidence") or contract.get("required_verification")
+        ),
         "stop_rule": contract.get("stop_rule") or default_stop_rule(finish_standard),
         "max_rounds": optional_int(contract.get("max_rounds")),
         "timebox_minutes": optional_int(contract.get("timebox_minutes")),
@@ -538,6 +551,8 @@ def normalize_round_record(raw: dict[str, Any]) -> dict[str, Any]:
     record["mission_complete"] = bool(mission_complete)
     record["remaining_gap_ledger"] = normalize_remaining_gaps(record.get("remaining_gap_ledger"))
     record["completion_evidence"] = normalize_completion_evidence(record.get("completion_evidence"))
+    record["required_evidence"] = normalize_evidence_requirements(record.get("required_evidence"))
+    record["verification_evidence_ids"] = normalize_evidence_requirements(record.get("verification_evidence_ids"))
     record.pop("stage_status", None)
     record.pop("top_level_goal_met", None)
     return record
@@ -561,6 +576,7 @@ def normalize_state(raw_state: dict[str, Any]) -> dict[str, Any]:
     state["last_verdict"] = state.get("last_verdict", "continue")
     state["stop_reason"] = state.get("stop_reason")
     state["budget_started_at"] = state.get("budget_started_at") or state.get("created_at") or now_iso()
+    state["verification_evidence"] = state.get("verification_evidence", [])
     state["run_id"] = state.get("run_id") or f"legacy-{workspace_key(workspace_root)}"
     state["parent_run_id"] = state.get("parent_run_id")
     return state
@@ -615,6 +631,88 @@ def git_info(path: Path) -> dict[str, Any]:
         "dirty": bool(status),
         "status_porcelain": status.splitlines() if status else [],
     }
+
+
+def ensure_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def output_tail(value: Any, limit: int = VERIFY_OUTPUT_TAIL_CHARS) -> str:
+    value = ensure_text(value)
+    if not value:
+        return ""
+    return value[-limit:]
+
+
+def verification_output_hash(stdout: Any, stderr: Any) -> str:
+    payload = json.dumps(
+        {"stdout": ensure_text(stdout), "stderr": ensure_text(stderr)},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def new_evidence_id(name: str, command: list[str], started_at: str) -> str:
+    seed = json.dumps([name, command, started_at, uuid.uuid4().hex], ensure_ascii=False)
+    return f"{slugify(name)}-{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:10]}"
+
+
+def latest_evidence_for_requirement(
+    evidence: list[dict[str, Any]],
+    requirement: str,
+) -> dict[str, Any] | None:
+    for item in reversed(evidence):
+        if item.get("id") == requirement or item.get("name") == requirement:
+            return item
+    return None
+
+
+def required_evidence_for_record(
+    state: dict[str, Any],
+    *,
+    explicit_requirements: list[str],
+    round_gate_result: str,
+    gate_status: str,
+    mission_complete: bool,
+) -> list[str]:
+    required = normalize_evidence_requirements(explicit_requirements)
+    if round_gate_result == "hard-pass" or gate_status == "gate-complete" or mission_complete:
+        required.extend(normalize_evidence_requirements(state.get("contract", {}).get("required_evidence")))
+
+    seen: set[str] = set()
+    unique_required: list[str] = []
+    for item in required:
+        if item not in seen:
+            unique_required.append(item)
+            seen.add(item)
+    return unique_required
+
+
+def validate_required_evidence(
+    state: dict[str, Any],
+    required: list[str],
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
+    evidence = state.get("verification_evidence", [])
+    missing: list[str] = []
+    failed: list[str] = []
+    matched: list[dict[str, Any]] = []
+
+    for requirement in required:
+        item = latest_evidence_for_requirement(evidence, requirement)
+        if not item:
+            missing.append(requirement)
+            continue
+        if item.get("status") != "success":
+            failed.append(requirement)
+            continue
+        matched.append(item)
+
+    return missing, failed, matched
 
 
 def iter_project_files(root: Path) -> list[Path]:
@@ -846,6 +944,7 @@ def build_state(
         "contract": contract,
         "guidance": {"expected_gap_checks": expected_gap_checks(contract["finish_standard"])},
         "remaining_gap_ledger": [],
+        "verification_evidence": [],
         "active_round": None,
         "rounds": [],
         "next_round": None,
@@ -1346,6 +1445,7 @@ def build_runtime_context(
         "run_id": state.get("run_id"),
         "status": state.get("status"),
         "stop_reason": state.get("stop_reason"),
+        "verification_evidence": state.get("verification_evidence", [])[-5:],
     }
 
 
@@ -1373,6 +1473,7 @@ def render_runtime_context_markdown(context: dict[str, Any]) -> str:
         f"- Success signal: {value(contract.get('success_signal'))}",
         f"- Current gate: {value(contract.get('current_gate'))}",
         f"- Stop rule: {value(contract.get('stop_rule'))}",
+        f"- Required evidence: {value(contract.get('required_evidence'))}",
         "",
         "## Budget",
         f"- Rounds used: {value(budget.get('rounds_used'))}",
@@ -1416,6 +1517,21 @@ def render_runtime_context_markdown(context: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Recent Verification Evidence",
+        ]
+    )
+    evidence_items = context.get("verification_evidence") or []
+    if not evidence_items:
+        lines.append("- none")
+    else:
+        for item in evidence_items:
+            lines.append(
+                f"- {value(item.get('name'))} [{value(item.get('status'))}] id={value(item.get('id'))} command={value(item.get('command'))}"
+            )
+
+    lines.extend(
+        [
+            "",
             "## Completion Audit",
         ]
     )
@@ -1453,6 +1569,7 @@ def init_command(args: argparse.Namespace) -> int:
         "current_gate": args.current_gate,
         "scope": args.scope,
         "constraints": args.constraint,
+        "required_evidence": args.required_evidence,
         "stop_rule": args.stop_rule,
         "max_rounds": args.max_rounds,
         "timebox_minutes": args.timebox_minutes,
@@ -1809,6 +1926,109 @@ def preflight_command(args: argparse.Namespace) -> int:
     )
 
 
+def verify_command(args: argparse.Namespace) -> int:
+    workspace_root = resolve_workspace_root(args.workspace)
+    state_path = state_path_for(workspace_root, args.host)
+    state = load_state(state_path)
+    if not state:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": ["Run `init` before recording verification evidence."],
+                "status": "error",
+                "summary": "Cannot record verification evidence without an initialized Superloop harness state.",
+            },
+            exit_code=1,
+        )
+
+    command = list(args.command or [])
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "next_actions": [
+                    "Pass the command after `--`, for example: `verify --name check -- npm run check`."
+                ],
+                "status": "error",
+                "summary": "Verification command is required.",
+            },
+            exit_code=1,
+        )
+
+    name = args.name or " ".join(command[:3])
+    started_at = now_iso()
+    git_before = git_info(workspace_root)
+    stdout = ""
+    stderr = ""
+    exit_code: int | None = None
+    timed_out = False
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout_seconds,
+        )
+        stdout = ensure_text(result.stdout)
+        stderr = ensure_text(result.stderr)
+        exit_code = result.returncode
+    except FileNotFoundError as exc:
+        stderr = str(exc)
+        exit_code = 127
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = ensure_text(exc.stdout)
+        stderr = ensure_text(exc.stderr)
+
+    ended_at = now_iso()
+    status = "success" if exit_code == 0 and not timed_out else "failure"
+    evidence = {
+        "id": new_evidence_id(name, command, started_at),
+        "name": name,
+        "command": command,
+        "cwd": str(workspace_root),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_seconds": max(0, int((parse_iso(ended_at) - parse_iso(started_at)).total_seconds())),
+        "status": status,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "timeout_seconds": args.timeout_seconds,
+        "stdout_tail": output_tail(stdout),
+        "stderr_tail": output_tail(stderr),
+        "output_sha256": verification_output_hash(stdout, stderr),
+        "git": {
+            "before": git_before,
+            "after": git_info(workspace_root),
+        },
+    }
+    state.setdefault("verification_evidence", []).append(evidence)
+    state["updated_at"] = ended_at
+    save_state(state_path, state)
+
+    next_actions = (
+        [f"Use `record --require-evidence {name}` to require this successful verification."]
+        if status == "success"
+        else [f"Fix the failing verification `{name}` before recording a hard-pass that requires it."]
+    )
+    return emit(
+        {
+            "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+            "evidence": evidence,
+            "host": host_profile(args.host),
+            "next_actions": next_actions,
+            "status": status,
+            "summary": f"Recorded verification evidence `{name}` with status `{status}`.",
+        },
+        exit_code=0 if status == "success" else 1,
+    )
+
+
 def record_command(args: argparse.Namespace) -> int:
     workspace_root = resolve_workspace_root(args.workspace)
     state_path = state_path_for(workspace_root, args.host)
@@ -1886,6 +2106,43 @@ def record_command(args: argparse.Namespace) -> int:
             },
             exit_code=1,
         )
+    required_evidence = required_evidence_for_record(
+        state,
+        explicit_requirements=args.require_evidence,
+        round_gate_result=args.round_gate_result,
+        gate_status=gate_status,
+        mission_complete=mission_complete,
+    )
+    missing_evidence, failed_evidence, matched_evidence = validate_required_evidence(
+        state,
+        required_evidence,
+    )
+    if missing_evidence or failed_evidence:
+        blockers = []
+        if missing_evidence:
+            blockers.append(f"Missing required verification evidence: {', '.join(missing_evidence)}")
+        if failed_evidence:
+            blockers.append(f"Required verification evidence is not successful: {', '.join(failed_evidence)}")
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "host": host_profile(args.host),
+                "next_actions": [
+                    "Run `verify --name <evidence> -- <command>` successfully before recording this round."
+                ],
+                "required_evidence": required_evidence,
+                "status": "error",
+                "status_card": build_status_card(
+                    stage="record",
+                    classification="code-regression",
+                    recommended_action="Run the missing or failing verification command before recording hard-pass.",
+                    blockers=blockers,
+                    can_continue=True,
+                ),
+                "summary": "Required verification evidence is missing or failed.",
+            },
+            exit_code=1,
+        )
     success_stop = (mission_complete or args.stop_rule_satisfied) and not remaining_gap_ledger
     projected_budget = budget_snapshot(state, additional_rounds=1)
     budget_exhausted = projected_budget["rounds_exhausted"] or projected_budget["timebox_exhausted"]
@@ -1957,6 +2214,8 @@ def record_command(args: argparse.Namespace) -> int:
         "next_round": next_round,
         "remaining_gap_ledger": remaining_gap_ledger,
         "completion_evidence": completion_evidence,
+        "required_evidence": required_evidence,
+        "verification_evidence_ids": [item["id"] for item in matched_evidence],
         "mission_complete": mission_complete,
         "stop_rule_satisfied": args.stop_rule_satisfied,
         "blocked_by": blocked_by,
@@ -2017,9 +2276,11 @@ def record_command(args: argparse.Namespace) -> int:
                 "failure_signature": failure_sig,
                 "next_round": next_round,
                 "remaining_gap_ledger": remaining_gap_ledger,
+                "required_evidence": required_evidence,
                 "resume_condition": resume_condition,
                 "status": status,
                 "stop_reason": stop_reason,
+                "verification_evidence_ids": [item["id"] for item in matched_evidence],
             },
             "status_card": build_status_card(
                 stage="record",
@@ -2085,10 +2346,37 @@ def render_report_markdown(
         item("Current gate", contract.get("current_gate")),
         item("Scope", contract.get("scope")),
         item("Constraints", contract.get("constraints")),
+        item("Required evidence", contract.get("required_evidence")),
         item("Stop rule", contract.get("stop_rule")),
         "",
-        "## Round Ledger",
+        "## Verification Evidence",
     ]
+
+    evidence_items = state.get("verification_evidence", [])
+    if not evidence_items:
+        lines.append("- No verification evidence recorded yet.")
+    else:
+        for evidence in evidence_items[-10:]:
+            lines.extend(
+                [
+                    "",
+                    f"### Evidence {evidence.get('id')}",
+                    item("Name", evidence.get("name")),
+                    item("Status", evidence.get("status")),
+                    item("Exit code", evidence.get("exit_code")),
+                    item("Command", evidence.get("command")),
+                    item("Started at", evidence.get("started_at")),
+                    item("Ended at", evidence.get("ended_at")),
+                    item("Output sha256", evidence.get("output_sha256")),
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Round Ledger",
+        ]
+    )
 
     if not rounds:
         lines.append("- No rounds recorded yet.")
@@ -2108,6 +2396,8 @@ def render_report_markdown(
                     item("Verdict", round_record.get("verdict")),
                     item("Remaining gaps", round_record.get("remaining_gap_ledger")),
                     item("Completion evidence", round_record.get("completion_evidence")),
+                    item("Required evidence", round_record.get("required_evidence")),
+                    item("Verification evidence ids", round_record.get("verification_evidence_ids")),
                     item("Failure class", failure_class),
                     item("Failure signature", round_record.get("failure_signature")),
                     item("Failure repeat count", round_record.get("failure_repeat_count")),
@@ -2262,6 +2552,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--current-gate", "--stage-gate", dest="current_gate")
     init_parser.add_argument("--scope")
     init_parser.add_argument("--constraint", action="append", default=[])
+    init_parser.add_argument("--required-evidence", "--required-verification", dest="required_evidence", action="append", default=[])
     init_parser.add_argument("--stop-rule")
     init_parser.add_argument("--max-rounds", type=positive_int)
     init_parser.add_argument("--timebox-minutes", type=positive_int)
@@ -2279,6 +2570,17 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--require-env", action="append", default=[])
     preflight_parser.add_argument("--optional-env", action="append", default=[])
     preflight_parser.set_defaults(func=preflight_command)
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="Run a verification command through the harness and store evidence for later record gates.",
+    )
+    verify_parser.add_argument("--workspace")
+    verify_parser.add_argument("--host", default="auto", type=normalize_host)
+    verify_parser.add_argument("--name", required=True)
+    verify_parser.add_argument("--timeout-seconds", type=positive_int, default=DEFAULT_VERIFY_TIMEOUT_SECONDS)
+    verify_parser.add_argument("command", nargs=argparse.REMAINDER)
+    verify_parser.set_defaults(func=verify_command)
 
     status_card_parser = subparsers.add_parser(
         "status-card",
@@ -2348,6 +2650,7 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--next-round")
     record_parser.add_argument("--remaining-gap", action="append", default=[])
     record_parser.add_argument("--completion-evidence", action="append", default=[])
+    record_parser.add_argument("--require-evidence", action="append", default=[])
     record_parser.add_argument("--mission-complete", "--top-level-goal-met", dest="mission_complete", action="store_true")
     record_parser.add_argument("--stop-rule-satisfied", action="store_true")
     record_parser.add_argument("--blocked-by")
