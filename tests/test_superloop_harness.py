@@ -644,6 +644,62 @@ class SuperloopHarnessTests(unittest.TestCase):
             [verified["evidence"]["id"]],
         )
 
+    def test_parallel_verify_commands_preserve_all_evidence(self) -> None:
+        self.run_harness(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--goal",
+            "Preserve concurrent verification evidence",
+            "--workstream",
+            "agent harness",
+        )
+
+        merged_env = os.environ.copy()
+        merged_env["SUPERLOOP_STATE_HOME"] = str(self.state_home)
+        processes = []
+        for name in ("alpha", "beta"):
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(HARNESS),
+                        "verify",
+                        "--workspace",
+                        str(self.workspace),
+                        "--name",
+                        name,
+                        "--",
+                        sys.executable,
+                        "-c",
+                        f"import time; time.sleep(0.2); print('{name}')",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    encoding="utf-8",
+                    text=True,
+                    env=merged_env,
+                )
+            )
+
+        payloads = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            payloads.append(json.loads(stdout))
+
+        self.assertEqual({payload["evidence"]["name"] for payload in payloads}, {"alpha", "beta"})
+        report = self.run_harness(
+            "report",
+            "--workspace",
+            str(self.workspace),
+            "--format",
+            "json",
+        )
+        evidence_names = {item["name"] for item in report["state"]["verification_evidence"]}
+        self.assertIn("alpha", evidence_names)
+        self.assertIn("beta", evidence_names)
+
     def test_no_gap_sentinel_clears_previous_remaining_gaps(self) -> None:
         self.run_harness(
             "init",

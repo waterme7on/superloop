@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -586,6 +587,38 @@ def load_state(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return normalize_state(json.loads(path.read_text(encoding="utf-8")))
+
+
+def acquire_state_lock(path: Path, timeout_seconds: int = 30) -> Path:
+    lock_path = Path(f"{path}.lock")
+    deadline = time.monotonic() + timeout_seconds
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(f"pid={os.getpid()} acquired_at={now_iso()}\n")
+            return lock_path
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > 300:
+                    lock_path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for Superloop state lock: {lock_path}")
+            time.sleep(0.05)
+
+
+def release_state_lock(lock_path: Path | None) -> None:
+    if not lock_path:
+        return
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
@@ -2007,9 +2040,27 @@ def verify_command(args: argparse.Namespace) -> int:
             "after": git_info(workspace_root),
         },
     }
-    state.setdefault("verification_evidence", []).append(evidence)
-    state["updated_at"] = ended_at
-    save_state(state_path, state)
+    lock_path = None
+    try:
+        lock_path = acquire_state_lock(state_path)
+        latest_state = load_state(state_path) or state
+        latest_state.setdefault("verification_evidence", []).append(evidence)
+        latest_state["updated_at"] = ended_at
+        save_state(state_path, latest_state)
+    except TimeoutError as exc:
+        return emit(
+            {
+                "artifacts": {"state_path": str(state_path), "workspace_root": str(workspace_root)},
+                "evidence": evidence,
+                "host": host_profile(args.host),
+                "next_actions": ["Retry `verify`; the command ran but evidence could not be persisted."],
+                "status": "error",
+                "summary": str(exc),
+            },
+            exit_code=1,
+        )
+    finally:
+        release_state_lock(lock_path)
 
     next_actions = (
         [f"Use `record --require-evidence {name}` to require this successful verification."]
